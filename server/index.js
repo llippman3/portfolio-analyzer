@@ -12,6 +12,12 @@ config();
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// Create uploads directory if it doesn't exist
+const uploadsDir = 'uploads';
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
+
 // Configure multer for file uploads
 const upload = multer({ 
   dest: 'uploads/',
@@ -26,8 +32,13 @@ if (GEMINI_API_KEY && GEMINI_API_KEY !== 'YOUR_API_KEY_HERE') {
   genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 }
 
-// Middleware
-app.use(cors());
+// Middleware - CORS must be before routes
+app.use(cors({
+  origin: '*', // Allow all origins for now (Railway deployment)
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true
+}));
 app.use(express.json());
 
 // Enable error handling for yahoo-finance2
