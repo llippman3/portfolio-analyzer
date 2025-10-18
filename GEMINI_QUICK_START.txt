@@ -1,0 +1,65 @@
+🤖 GEMINI AI - QUICK START
+==========================
+
+Get your FREE API key and enable statement parsing!
+
+STEP 1: Get API Key (2 minutes)
+--------------------------------
+1. Visit: https://aistudio.google.com/app/apikey
+2. Click "Get API Key" or "Create API Key"
+3. Copy your key (starts with AIza...)
+
+STEP 2: Set the Key
+-------------------
+Mac/Linux:
+  export GEMINI_API_KEY="your-api-key-here"
+  cd /Users/lucaslippman/wealthmanagement/server
+  node index.js
+
+Windows CMD:
+  set GEMINI_API_KEY=your-api-key-here
+  cd C:\path\to\wealthmanagement\server
+  node index.js
+
+Windows PowerShell:
+  $env:GEMINI_API_KEY="your-api-key-here"
+  cd C:\path\to\wealthmanagement\server
+  node index.js
+
+STEP 3: Verify
+--------------
+Look for this in server output:
+  🤖 Gemini AI: ✅ Configured
+
+Or check:
+  curl http://localhost:3001/health
+  Should show: "geminiConfigured": true
+
+STEP 4: Use It!
+---------------
+1. Open http://localhost:5173
+2. Scroll to "Upload Brokerage Statement"
+3. Upload a screenshot of your statement
+4. Click "Parse Statement"
+5. Watch Gemini extract all your data!
+
+FREE TIER:
+----------
+✅ 1,500 requests/day
+✅ Perfect for personal use
+✅ Fast Gemini 2.5 Flash-Lite model
+✅ Cost: ~$0.00015 per statement (essentially free!)
+
+WHAT GETS EXTRACTED:
+--------------------
+✅ Total portfolio value
+✅ Cost basis
+✅ Unrealized gains/losses
+✅ Income earned
+✅ All holdings with symbols, shares, prices
+✅ Calculated returns
+
+Full guide: GEMINI_SETUP.md
+
+
+

@@ -1,0 +1,15 @@
+# Environment variables (contains API keys)
+.env
+
+# Uploaded files
+uploads/*
+!uploads/.gitkeep
+
+# Logs
+*.log
+
+# Node modules
+node_modules/
+
+
+

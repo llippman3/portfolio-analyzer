@@ -1,0 +1,78 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+
+@layer base {
+  body {
+    @apply bg-white min-h-screen text-black;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    letter-spacing: -0.01em;
+  }
+  
+  h1, h2, h3, h4, h5, h6 {
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    letter-spacing: -0.03em;
+  }
+}
+
+@layer components {
+  .input-field {
+    @apply w-full px-4 py-3 border border-neutral-200 rounded-none focus:ring-0 focus:border-black transition-all bg-white text-black placeholder-neutral-400;
+  }
+  
+  .btn-primary {
+    @apply bg-black text-white font-medium px-8 py-4 rounded-full hover:bg-neutral-800 transition-all duration-300 tracking-wide uppercase text-sm;
+  }
+  
+  .card {
+    @apply bg-white rounded-none p-8 border border-neutral-200;
+  }
+  
+  .metric-card {
+    @apply bg-white rounded-none p-6 border border-neutral-200 hover:border-black transition-all duration-300;
+  }
+  
+  .section-divider {
+    @apply border-t border-neutral-200 my-16;
+  }
+}
+
+/* Print Styles */
+@media print {
+  @page {
+    margin: 1cm;
+    size: A4;
+  }
+
+  body {
+    background: white !important;
+  }
+
+  .print\:hidden {
+    display: none !important;
+  }
+
+  .card {
+    break-inside: avoid;
+    page-break-inside: avoid;
+    box-shadow: none !important;
+    border: 1px solid #ccc !important;
+    margin-bottom: 1rem;
+  }
+
+  button {
+    display: none !important;
+  }
+
+  input, select {
+    border: 1px solid #000 !important;
+    background: white !important;
+  }
+
+  header button {
+    display: none !important;
+  }
+}
+
