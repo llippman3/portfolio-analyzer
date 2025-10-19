@@ -22,6 +22,7 @@ const StatementUploader = ({ onDataExtracted, onMetricsCalculated, initialData }
   const [showSaveModal, setShowSaveModal] = useState(false);
 
   // Load initial data if provided (for saved portfolios)
+  // DON'T auto-refresh prices - let user click "Refresh Prices" button
   useEffect(() => {
     if (initialData) {
       if (initialData.extractedData) {
@@ -38,7 +39,8 @@ const StatementUploader = ({ onDataExtracted, onMetricsCalculated, initialData }
         setStdDevData(initialData.stdDevData);
       }
     }
-  }, [initialData, onMetricsCalculated]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialData]); // Only re-run when initialData changes, not when onMetricsCalculated changes
 
   const handleFileSelect = (e) => {
     const selectedFile = e.target.files[0];
@@ -116,6 +118,55 @@ const StatementUploader = ({ onDataExtracted, onMetricsCalculated, initialData }
   const formatPercent = (value) => {
     if (value === null || value === undefined) return 'N/A';
     return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
+  };
+
+  const refreshPrices = async () => {
+    if (!extractedData || !extractedData.holdings) {
+      setError('No portfolio data to refresh');
+      return;
+    }
+
+    setUploading(true);
+    setError(null);
+
+    try {
+      console.log('🔄 Manually refreshing prices...');
+      
+      const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
+      const response = await fetch(`${API_BASE_URL}/update-portfolio-prices`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ portfolioData: extractedData })
+      });
+      
+      const result = await response.json();
+      
+      if (result.success) {
+        console.log('✅ Prices refreshed successfully!');
+        
+        // Set the updated data with current prices
+        setExtractedData(result.data);
+        
+        // Wait for state to update before calculating metrics
+        // Use setTimeout to ensure the state update has propagated
+        setTimeout(async () => {
+          try {
+            if (result.data.holdings && result.data.holdings.length > 0) {
+              await calculateStdDev(result.data);
+              await calculateAllMetrics(result.data);
+            }
+          } finally {
+            setUploading(false);
+          }
+        }, 100);
+      } else {
+        throw new Error(result.error);
+      }
+    } catch (error) {
+      console.error('Error refreshing prices:', error);
+      setError(`Failed to refresh prices: ${error.message}`);
+      setUploading(false);
+    }
   };
 
   const calculateStdDev = async (data) => {
@@ -326,38 +377,17 @@ const StatementUploader = ({ onDataExtracted, onMetricsCalculated, initialData }
             </div>
           </div>
 
-          {/* Account Info */}
-          {extractedData.accountInfo && (
-            <div className="p-4 bg-gray-50 rounded-lg border border-gray-200">
-              <h3 className="font-semibold text-gray-800 mb-2">Account Information</h3>
-              <div className="grid md:grid-cols-3 gap-4 text-sm">
-                {extractedData.accountInfo.accountType && (
-                  <div>
-                    <span className="text-gray-600">Type:</span>
-                    <span className="ml-2 font-semibold text-gray-900">
-                      {extractedData.accountInfo.accountType}
-                    </span>
-                  </div>
-                )}
-                {extractedData.accountInfo.statementDate && (
-                  <div>
-                    <span className="text-gray-600">Date:</span>
-                    <span className="ml-2 font-semibold text-gray-900">
-                      {extractedData.accountInfo.statementDate}
-                    </span>
-                  </div>
-                )}
-                {extractedData.accountInfo.accountNumber && (
-                  <div>
-                    <span className="text-gray-600">Account:</span>
-                    <span className="ml-2 font-semibold text-gray-900">
-                      {extractedData.accountInfo.accountNumber}
-                    </span>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
+          {/* Refresh Prices Button */}
+          <div className="flex justify-center mt-6">
+            <button
+              onClick={refreshPrices}
+              disabled={uploading || calculatingMetrics}
+              className="flex items-center gap-2 px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors shadow-lg hover:shadow-xl disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Activity className="w-5 h-5" />
+              <span className="font-semibold">Refresh Current Prices</span>
+            </button>
+          </div>
 
           {/* Holdings Table */}
           {extractedData.holdings && extractedData.holdings.length > 0 && (
@@ -406,157 +436,6 @@ const StatementUploader = ({ onDataExtracted, onMetricsCalculated, initialData }
                       })}
                     </tbody>
                   </table>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Calculated Return */}
-          {extractedData.calculatedReturn !== undefined && (
-            <div className="p-4 bg-gradient-to-r from-primary-50 to-primary-100 rounded-lg border border-primary-200">
-              <p className="text-sm font-semibold text-primary-800 mb-1">Calculated Portfolio Return</p>
-              <p className="text-3xl font-bold text-primary-900">
-                {formatPercent(extractedData.calculatedReturn)}
-              </p>
-              <p className="text-xs text-primary-700 mt-1">
-                Based on (Total Value - Cost Basis) / Cost Basis
-              </p>
-            </div>
-          )}
-
-          {/* Portfolio Standard Deviation */}
-          {calculatingStdDev && (
-            <div className="p-4 bg-gray-50 rounded-lg border border-gray-200 flex items-center gap-3">
-              <Loader className="w-6 h-6 text-primary-600 animate-spin" />
-              <p className="text-sm text-gray-700">Calculating portfolio standard deviation from historical data...</p>
-            </div>
-          )}
-
-          {stdDevData && (
-            <div className="space-y-4">
-              <div className="p-5 bg-gradient-to-r from-purple-50 to-purple-100 rounded-lg border-2 border-purple-300">
-                <div className="flex items-center gap-3 mb-3">
-                  <Activity className="w-8 h-8 text-purple-600" />
-                  <div>
-                    <p className="text-sm font-semibold text-purple-800">Portfolio Standard Deviation</p>
-                    <p className="text-xs text-purple-700">Based on 1-year historical data</p>
-                  </div>
-                </div>
-                
-                <div className="text-4xl font-bold text-purple-900 mb-2">
-                  {stdDevData.portfolioStdDevPercent.toFixed(2)}%
-                </div>
-                
-                <p className="text-sm text-purple-800">
-                  This measures your portfolio's volatility. Lower is less risky.
-                </p>
-              </div>
-
-              {/* Individual Stock Volatilities - Collapsible */}
-              <div className="p-4 bg-white rounded-lg border border-gray-200">
-                <button
-                  onClick={() => setShowVolatilities(!showVolatilities)}
-                  className="w-full flex items-center justify-between hover:bg-gray-50 p-2 rounded transition-colors"
-                >
-                  <h4 className="font-semibold text-gray-800 flex items-center gap-2">
-                    <TrendingUp className="w-5 h-5 text-gray-600" />
-                    Individual Stock Volatilities
-                  </h4>
-                  {showVolatilities ? (
-                    <ChevronUp className="w-5 h-5 text-gray-600" />
-                  ) : (
-                    <ChevronDown className="w-5 h-5 text-gray-600" />
-                  )}
-                </button>
-                
-                {showVolatilities && (
-                  <div className="space-y-2 mt-3">
-                    {comprehensiveMetrics ? (
-                      // Use Yahoo Finance 5-year official statistics
-                      comprehensiveMetrics.holdings.map((holding, idx) => (
-                        <div key={idx} className="flex justify-between items-center p-2 bg-gray-50 rounded">
-                          <div>
-                            <span className="font-semibold text-gray-900">{holding.symbol}</span>
-                            <span className="text-sm text-gray-600 ml-2">
-                              ({holding.weightPercent.toFixed(1)}% of portfolio)
-                            </span>
-                          </div>
-                          <div className="text-right">
-                            <span className="font-semibold text-purple-700">
-                              {holding.stdDevPercent ? holding.stdDevPercent.toFixed(2) : 'N/A'}%
-                            </span>
-                            {holding.stdDevPercent && (
-                              <span className="text-xs text-gray-500 ml-1">
-                                (5Y)
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      ))
-                    ) : stdDevData ? (
-                      // Fallback to calculated if Yahoo Finance data not available
-                      stdDevData.stocks.map((stock, idx) => (
-                        <div key={idx} className="flex justify-between items-center p-2 bg-gray-50 rounded">
-                          <div>
-                            <span className="font-semibold text-gray-900">{stock.symbol}</span>
-                            <span className="text-sm text-gray-600 ml-2">
-                              ({(stock.weight * 100).toFixed(1)}% of portfolio)
-                            </span>
-                          </div>
-                          <span className="font-semibold text-purple-700">
-                            {stock.annualizedStdDevPercent.toFixed(2)}%
-                          </span>
-                        </div>
-                      ))
-                    ) : (
-                      <p className="text-gray-500 text-sm">No volatility data available</p>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              {/* Correlation Info - Collapsible */}
-              {stdDevData.correlationMatrix && stdDevData.stocks.length > 1 && (
-                <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">
-                  <button
-                    onClick={() => setShowCorrelations(!showCorrelations)}
-                    className="w-full flex items-center justify-between hover:bg-blue-100 p-2 rounded transition-colors"
-                  >
-                    <div>
-                      <h4 className="font-semibold text-blue-900">📊 Stock Correlations</h4>
-                      <p className="text-xs text-blue-800 text-left">
-                        How your stocks move together (1.0 = perfectly correlated, 0 = independent, -1.0 = inverse)
-                      </p>
-                    </div>
-                    {showCorrelations ? (
-                      <ChevronUp className="w-5 h-5 text-blue-700 flex-shrink-0 ml-2" />
-                    ) : (
-                      <ChevronDown className="w-5 h-5 text-blue-700 flex-shrink-0 ml-2" />
-                    )}
-                  </button>
-                  
-                  {showCorrelations && (
-                    <div className="grid grid-cols-2 gap-2 text-xs mt-3">
-                      {stdDevData.stocks.map((stock1, i) => 
-                        stdDevData.stocks.slice(i + 1).map((stock2, j) => {
-                          const actualJ = i + j + 1;
-                          const corr = stdDevData.correlationMatrix[i][actualJ];
-                          return (
-                            <div key={`${i}-${actualJ}`} className="bg-white p-2 rounded">
-                              <span className="font-semibold">{stock1.symbol} ↔ {stock2.symbol}:</span>
-                              <span className={`ml-2 font-bold ${
-                                corr > 0.7 ? 'text-green-600' : 
-                                corr > 0.3 ? 'text-yellow-600' : 
-                                'text-red-600'
-                              }`}>
-                                {corr.toFixed(3)}
-                              </span>
-                            </div>
-                          );
-                        })
-                      )}
-                    </div>
-                  )}
                 </div>
               )}
             </div>

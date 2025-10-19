@@ -45,6 +45,104 @@ app.use(express.json());
 yahooFinance.suppressNotices(['yahooSurvey']);
 
 /**
+ * HELPER: Map common crypto symbols to Yahoo Finance format
+ */
+function getYahooSymbol(symbol) {
+  const cryptoMap = {
+    'BTC': 'BTC-USD',
+    'ETH': 'ETH-USD',
+    'ETC': 'ETC-USD',
+    'AVAX': 'AVAX-USD',
+    'SOL': 'SOL-USD',
+    'ADA': 'ADA-USD',
+    'DOT': 'DOT-USD',
+    'MATIC': 'MATIC-USD'
+  };
+  
+  return cryptoMap[symbol.toUpperCase()] || symbol;
+}
+
+/**
+ * SHARED FUNCTION: Update current prices from Yahoo Finance
+ * This is used both for newly uploaded statements and loaded portfolios
+ */
+async function updateCurrentPrices(portfolioData) {
+  if (!portfolioData.holdings || !Array.isArray(portfolioData.holdings)) {
+    return portfolioData;
+  }
+
+  console.log('📊 Fetching current market prices from Yahoo Finance...');
+  const updatedHoldings = await Promise.all(portfolioData.holdings.map(async (holding) => {
+    try {
+      // Map crypto symbols to Yahoo Finance format
+      const yahooSymbol = getYahooSymbol(holding.symbol);
+      const quote = await yahooFinance.quote(yahooSymbol);
+      const currentMarketPrice = quote.regularMarketPrice;
+      
+      console.log(`  ✓ ${holding.symbol}: Current market price = $${currentMarketPrice.toFixed(2)} (was $${(holding.currentPrice || 0).toFixed(2)})`);
+      
+      // Update with current market price
+      holding.currentPrice = currentMarketPrice;
+      
+      // Recalculate totalValue with current price
+      if (holding.shares) {
+        holding.totalValue = holding.shares * currentMarketPrice;
+      }
+      
+      // Calculate total cost basis if needed
+      if (!holding.totalCostBasis && holding.shares && holding.costBasis) {
+        holding.totalCostBasis = holding.shares * holding.costBasis;
+      }
+      
+      // Recalculate gainLoss with current price
+      if (holding.totalValue && holding.totalCostBasis) {
+        holding.gainLoss = holding.totalValue - holding.totalCostBasis;
+      } else if (holding.totalValue && holding.shares && holding.costBasis) {
+        holding.gainLoss = holding.totalValue - (holding.shares * holding.costBasis);
+      }
+      
+      // Recalculate gainLossPercent
+      if (holding.gainLoss && holding.totalCostBasis) {
+        holding.gainLossPercent = (holding.gainLoss / holding.totalCostBasis) * 100;
+      } else if (holding.gainLoss && holding.shares && holding.costBasis) {
+        const costBasisTotal = holding.shares * holding.costBasis;
+        if (costBasisTotal > 0) {
+          holding.gainLossPercent = (holding.gainLoss / costBasisTotal) * 100;
+        }
+      }
+      
+      return holding;
+    } catch (error) {
+      console.log(`  ⚠️  ${holding.symbol}: Could not fetch current price (${error.message}), using previous price`);
+      return holding;
+    }
+  }));
+  
+  portfolioData.holdings = updatedHoldings;
+  
+  // Recalculate portfolio totals with current prices
+  portfolioData.totalValue = portfolioData.holdings.reduce((sum, h) => sum + (h.totalValue || 0), 0);
+  
+  // Calculate totalCostBasis if needed
+  if (!portfolioData.totalCostBasis) {
+    portfolioData.totalCostBasis = portfolioData.holdings.reduce((sum, h) => {
+      if (h.totalCostBasis) return sum + h.totalCostBasis;
+      if (h.shares && h.costBasis) return sum + (h.shares * h.costBasis);
+      return sum;
+    }, 0);
+  }
+  
+  portfolioData.unrealizedGainLoss = portfolioData.totalValue - portfolioData.totalCostBasis;
+  if (portfolioData.totalCostBasis && portfolioData.totalCostBasis > 0) {
+    portfolioData.unrealizedGainLossPercent = (portfolioData.unrealizedGainLoss / portfolioData.totalCostBasis) * 100;
+  }
+  
+  console.log(`  ✓ Updated portfolio totalValue with current prices = $${portfolioData.totalValue.toFixed(2)}`);
+  
+  return portfolioData;
+}
+
+/**
  * GET /api/quote/:symbol
  * Get real-time quote for a stock symbol
  */
@@ -510,6 +608,9 @@ IMPORTANT:
         console.log(`  ✓ Calculated unrealizedGainLossPercent = ${parsedData.unrealizedGainLossPercent.toFixed(2)}%`);
       }
 
+      // Use the shared price update function
+      await updateCurrentPrices(parsedData);
+
       console.log('✅ Post-processing complete!');
     }
 
@@ -529,6 +630,43 @@ IMPORTANT:
       fs.unlinkSync(req.file.path);
     }
 
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+/**
+ * POST /api/update-portfolio-prices
+ * Update portfolio data with current market prices from Yahoo Finance
+ * This endpoint is used when loading saved portfolios to get fresh prices
+ */
+app.post('/api/update-portfolio-prices', async (req, res) => {
+  try {
+    const { portfolioData } = req.body;
+
+    if (!portfolioData || !portfolioData.holdings) {
+      return res.status(400).json({
+        success: false,
+        error: 'Portfolio data with holdings is required'
+      });
+    }
+
+    console.log(`\n🔄 Updating prices for ${portfolioData.holdings.length} holdings...`);
+
+    // Use the shared price update function
+    const updatedData = await updateCurrentPrices(portfolioData);
+
+    console.log('✅ Portfolio prices updated successfully!');
+
+    res.json({
+      success: true,
+      data: updatedData
+    });
+
+  } catch (error) {
+    console.error('Error updating portfolio prices:', error.message);
     res.status(500).json({
       success: false,
       error: error.message
@@ -570,7 +708,9 @@ app.post('/api/calculate-portfolio-stddev', async (req, res) => {
     const historicalDataPromises = holdings.map(async (holding) => {
       try {
         console.log(`  Fetching ${holding.symbol}...`);
-        const history = await yahooFinance.historical(holding.symbol, {
+        // Map crypto symbols to Yahoo Finance format
+        const yahooSymbol = getYahooSymbol(holding.symbol);
+        const history = await yahooFinance.historical(yahooSymbol, {
           period1: startDate,
           period2: endDate,
           interval: '1d'
@@ -839,8 +979,11 @@ app.post('/api/calculate-portfolio-metrics', async (req, res) => {
       try {
         const weight = (holding.totalValue || 0) / portfolioTotalValue;
         
+        // Map crypto symbols to Yahoo Finance format
+        const yahooSymbol = getYahooSymbol(holding.symbol);
+        
         // Get historical data for return calculation
-        const history = await yahooFinance.historical(holding.symbol, {
+        const history = await yahooFinance.historical(yahooSymbol, {
           period1: startDate,
           period2: endDate,
           interval: '1d'
@@ -871,7 +1014,7 @@ app.post('/api/calculate-portfolio-metrics', async (req, res) => {
         let dataSource = 'yahoo-5y';
         
         try {
-          const summary = await yahooFinance.quoteSummary(holding.symbol, {
+          const summary = await yahooFinance.quoteSummary(yahooSymbol, {
             modules: ['fundPerformance', 'defaultKeyStatistics']
           });
           
@@ -905,7 +1048,7 @@ app.post('/api/calculate-portfolio-metrics', async (req, res) => {
           dataSource = 'calculated';
           try {
             // Fetch 5-year monthly data for this stock to match Yahoo Finance methodology
-            const stockHistoryBeta = await yahooFinance.historical(holding.symbol, {
+            const stockHistoryBeta = await yahooFinance.historical(yahooSymbol, {
               period1: betaStartDate,
               period2: betaEndDate,
               interval: '1mo'
@@ -1141,8 +1284,11 @@ app.get('/api/benchmark/:symbol', async (req, res) => {
     const { symbol } = req.params;
     console.log(`\n🎯 Fetching benchmark metrics for ${symbol}...`);
 
+    // Map crypto symbols to Yahoo Finance format
+    const yahooSymbol = getYahooSymbol(symbol);
+
     // Fetch current quote to get price
-    const quote = await yahooFinance.quote(symbol);
+    const quote = await yahooFinance.quote(yahooSymbol);
     
     if (!quote || !quote.regularMarketPrice) {
       throw new Error(`No data available for ${symbol}`);
@@ -1172,7 +1318,7 @@ app.get('/api/benchmark/:symbol', async (req, res) => {
     console.log(`📊 Fetching 5-year data for ${symbol}...`);
 
     // Fetch 5-year historical data
-    const history = await yahooFinance.historical(symbol, {
+    const history = await yahooFinance.historical(yahooSymbol, {
       period1: startDate,
       period2: endDate,
       interval: '1d'
@@ -1349,6 +1495,171 @@ app.get('/api/benchmark/:symbol', async (req, res) => {
   }
 });
 
+/**
+ * POST /api/portfolio-performance-history
+ * Calculate portfolio performance over time (custom date range)
+ */
+app.post('/api/portfolio-performance-history', async (req, res) => {
+  try {
+    const { holdings, startDate: startDateStr, endDate: endDateStr } = req.body; // [{symbol, shares}], optional dates
+    
+    if (!holdings || !Array.isArray(holdings) || holdings.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Holdings array with symbols and shares is required'
+      });
+    }
+
+    console.log(`\n📈 Calculating portfolio performance history for ${holdings.length} holdings...`);
+    console.log(`📅 Received date parameters:`, { startDateStr, endDateStr });
+
+    // Use provided date range or default to 5 years
+    const endDate = endDateStr ? new Date(endDateStr) : new Date();
+    const startDate = startDateStr ? new Date(startDateStr) : (() => {
+      const d = new Date(endDate);
+      d.setFullYear(d.getFullYear() - 5);
+      return d;
+    })();
+    
+    console.log(`📅 Using date range: ${startDate.toISOString().split('T')[0]} to ${endDate.toISOString().split('T')[0]} (${Math.ceil((endDate - startDate) / (1000 * 60 * 60 * 24))} days)`);
+
+    // Fetch historical data for each holding
+    const historicalDataPromises = holdings.map(async (holding) => {
+      try {
+        const yahooSymbol = getYahooSymbol(holding.symbol);
+        const history = await yahooFinance.historical(yahooSymbol, {
+          period1: startDate,
+          period2: endDate,
+          interval: '1d'
+        });
+        
+        return {
+          symbol: holding.symbol,
+          shares: holding.shares,
+          history: history
+        };
+      } catch (error) {
+        console.error(`  ⚠️  Error fetching ${holding.symbol}:`, error.message);
+        return null;
+      }
+    });
+
+    const holdingsData = (await Promise.all(historicalDataPromises)).filter(h => h !== null);
+
+    if (holdingsData.length === 0) {
+      throw new Error('Failed to fetch data for any holdings');
+    }
+
+    // Build a date-aligned array of portfolio values
+    // Use the dates from the first holding as reference
+    const referenceDates = holdingsData[0].history.map(h => h.date.toISOString().split('T')[0]);
+    
+    const portfolioHistory = referenceDates.map((date) => {
+      let totalValue = 0;
+      
+      // For each holding, find the price on this date
+      holdingsData.forEach((holdingData) => {
+        const priceOnDate = holdingData.history.find(h => h.date.toISOString().split('T')[0] === date);
+        if (priceOnDate) {
+          totalValue += priceOnDate.close * holdingData.shares;
+        }
+      });
+      
+      return {
+        date: date,
+        value: totalValue
+      };
+    });
+
+    // Normalize to $10,000 initial investment for fair comparison
+    const initialValue = portfolioHistory[0].value;
+    const normalizedHistory = portfolioHistory.map(point => ({
+      date: point.date,
+      value: (point.value / initialValue) * 10000
+    }));
+
+    console.log(`✅ Portfolio performance calculated: ${normalizedHistory.length} data points`);
+
+    res.json({
+      success: true,
+      data: {
+        history: normalizedHistory,
+        initialValue: initialValue,
+        finalValue: portfolioHistory[portfolioHistory.length - 1].value,
+        totalReturn: ((portfolioHistory[portfolioHistory.length - 1].value - initialValue) / initialValue) * 100
+      }
+    });
+
+  } catch (error) {
+    console.error('Error calculating portfolio performance:', error.message);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/benchmark-history/:symbol
+ * Get historical performance for a benchmark fund (normalized to $10,000)
+ * Query params: startDate (ISO string), endDate (ISO string)
+ */
+app.get('/api/benchmark-history/:symbol', async (req, res) => {
+  try {
+    const { symbol } = req.params;
+    const { startDate: startDateStr, endDate: endDateStr } = req.query;
+    
+    console.log(`\n📈 Fetching historical performance for ${symbol}...`);
+    console.log(`📅 Query params:`, { startDateStr, endDateStr });
+
+    const yahooSymbol = getYahooSymbol(symbol);
+
+    // Use provided date range or default to 5 years
+    const endDate = endDateStr ? new Date(endDateStr) : new Date();
+    const startDate = startDateStr ? new Date(startDateStr) : (() => {
+      const d = new Date(endDate);
+      d.setFullYear(d.getFullYear() - 5);
+      return d;
+    })();
+    
+    console.log(`📅 Using date range for ${symbol}: ${startDate.toISOString().split('T')[0]} to ${endDate.toISOString().split('T')[0]}`);
+
+    const history = await yahooFinance.historical(yahooSymbol, {
+      period1: startDate,
+      period2: endDate,
+      interval: '1d'
+    });
+
+    if (!history || history.length === 0) {
+      throw new Error(`No historical data available for ${symbol}`);
+    }
+
+    // Normalize to $10,000 initial investment
+    const initialPrice = history[0].close;
+    const normalizedHistory = history.map(point => ({
+      date: point.date.toISOString().split('T')[0],
+      value: (point.close / initialPrice) * 10000
+    }));
+
+    console.log(`✅ Fetched ${normalizedHistory.length} data points for ${symbol}`);
+
+    res.json({
+      success: true,
+      data: {
+        symbol: symbol,
+        history: normalizedHistory
+      }
+    });
+
+  } catch (error) {
+    console.error(`Error fetching benchmark history for ${req.params.symbol}:`, error.message);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({ 
@@ -1366,10 +1677,14 @@ app.listen(PORT, () => {
   console.log(`   - GET  /api/historical/:symbol`);
   console.log(`   - GET  /api/market-data`);
   console.log(`   - GET  /api/benchmark-funds`);
+  console.log(`   - GET  /api/benchmark/:symbol`);
+  console.log(`   - GET  /api/benchmark-history/:symbol`);
   console.log(`   - GET  /api/stock-info/:symbol`);
   console.log(`   - POST /api/portfolio-beta`);
   console.log(`   - POST /api/parse-statement (with file upload)`);
+  console.log(`   - POST /api/update-portfolio-prices`);
   console.log(`   - POST /api/calculate-portfolio-metrics`);
+  console.log(`   - POST /api/portfolio-performance-history`);
   console.log(`   - GET  /health`);
   console.log(`\n💡 Test with: http://localhost:${PORT}/api/quote/AAPL`);
   console.log(`🤖 Gemini AI: ${genAI ? '✅ Configured' : '❌ Not configured (set GEMINI_API_KEY)'}`);

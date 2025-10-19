@@ -206,12 +206,6 @@ function App() {
               <p className="text-lg text-neutral-600 leading-relaxed mb-8">
                 Evaluate your investment returns with institutional-grade metrics and discover if benchmark funds might serve you better. Make data-driven decisions about your financial future.
               </p>
-              <button 
-                onClick={() => document.getElementById('portfolio-form')?.scrollIntoView({ behavior: 'smooth' })}
-                className="btn-primary"
-              >
-                Analyze Now
-              </button>
             </div>
             <div className="relative">
               <div className="aspect-square rounded-full border-4 border-black overflow-hidden bg-neutral-100 flex items-center justify-center">

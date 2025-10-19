@@ -260,35 +260,85 @@ const RealPortfolioMetrics = ({ metricsData }) => {
 
       {/* Interpretation Guide */}
       <div className="bg-gradient-to-r from-purple-50 to-pink-50 border-2 border-purple-200 rounded-lg p-6">
-        <h4 className="font-bold text-purple-900 mb-3 text-xl">💡 What Do These Numbers Mean?</h4>
+        <h4 className="font-bold text-purple-900 mb-4 text-xl">💡 What Do These Numbers Mean?</h4>
         
-        <div className="space-y-3 text-sm">
-          <div>
-            <strong className="text-purple-900">Sharpe Ratio:</strong>
-            <span className="text-purple-800 ml-2">
-              Measures how much return you're getting for each unit of risk. A ratio above 1.0 is good, above 2.0 is very good.
-            </span>
+        <div className="space-y-5 text-sm">
+          <div className="bg-white/70 p-4 rounded-lg">
+            <strong className="text-purple-900 text-base">Sharpe Ratio</strong>
+            <p className="text-purple-800 mt-2 leading-relaxed">
+              Measures how much return you're getting for each unit of risk. It's calculated as: (Portfolio Return - Risk-Free Rate) / Standard Deviation.
+            </p>
+            <div className="mt-2 pl-4 border-l-4 border-purple-300">
+              <p className="text-purple-700 font-semibold">Rating Scale:</p>
+              <ul className="text-purple-800 mt-1 space-y-1">
+                <li>• &lt;1.0: Poor risk-adjusted returns</li>
+                <li>• 1.0-2.0: Good risk-adjusted returns</li>
+                <li>• &gt;2.0: Excellent risk-adjusted returns</li>
+              </ul>
+              <p className="text-purple-700 font-semibold mt-2">Example:</p>
+              <p className="text-purple-800 mt-1">
+                A Sharpe of 1.5 means you earn 1.5% of excess return for every 1% of risk taken. If two portfolios return 15%, but one has a Sharpe of 1.8 and the other 0.9, the first achieves the same return with much less risk.
+              </p>
+            </div>
           </div>
           
-          <div>
-            <strong className="text-purple-900">Jensen's Alpha:</strong>
-            <span className="text-purple-800 ml-2">
-              Shows if you're beating the market after adjusting for risk. Positive = outperforming, negative = underperforming.
-            </span>
+          <div className="bg-white/70 p-4 rounded-lg">
+            <strong className="text-purple-900 text-base">Jensen's Alpha</strong>
+            <p className="text-purple-800 mt-2 leading-relaxed">
+              Shows if you're beating the market after adjusting for risk. It measures the excess return beyond what would be expected given your portfolio's beta (market exposure).
+            </p>
+            <div className="mt-2 pl-4 border-l-4 border-purple-300">
+              <p className="text-purple-700 font-semibold">Interpretation:</p>
+              <ul className="text-purple-800 mt-1 space-y-1">
+                <li>• Positive: Outperforming the market (good stock picking or timing)</li>
+                <li>• Zero: Performing exactly as expected given your risk level</li>
+                <li>• Negative: Underperforming the market (would be better off in index funds)</li>
+              </ul>
+              <p className="text-purple-700 font-semibold mt-2">Example:</p>
+              <p className="text-purple-800 mt-1">
+                An alpha of +2.5% means you beat the market by 2.5% annually after accounting for risk. If the market returned 10% and your beta is 1.2 (suggesting you should earn 12%), but you actually earned 14.5%, your alpha is +2.5%.
+              </p>
+            </div>
           </div>
           
-          <div>
-            <strong className="text-purple-900">Treynor Ratio:</strong>
-            <span className="text-purple-800 ml-2">
-              Similar to Sharpe but uses beta instead of total volatility. Best for comparing well-diversified portfolios.
-            </span>
+          <div className="bg-white/70 p-4 rounded-lg">
+            <strong className="text-purple-900 text-base">Treynor Ratio</strong>
+            <p className="text-purple-800 mt-2 leading-relaxed">
+              Similar to Sharpe Ratio but uses beta (systematic risk) instead of total volatility. It's calculated as: (Portfolio Return - Risk-Free Rate) / Beta.
+            </p>
+            <div className="mt-2 pl-4 border-l-4 border-purple-300">
+              <p className="text-purple-700 font-semibold">Best Used For:</p>
+              <ul className="text-purple-800 mt-1 space-y-1">
+                <li>• Comparing well-diversified portfolios</li>
+                <li>• When most of your risk comes from market movements (not individual stocks)</li>
+                <li>• Evaluating portfolios as part of a larger investment strategy</li>
+              </ul>
+              <p className="text-purple-700 font-semibold mt-2">Example:</p>
+              <p className="text-purple-800 mt-1">
+                A Treynor of 0.12 means you earn 12% excess return per unit of market risk. If two portfolios have similar Sharpe ratios but different Treynor ratios (0.15 vs 0.08), the first is better at generating returns relative to its market exposure.
+              </p>
+            </div>
           </div>
           
-          <div>
-            <strong className="text-purple-900">Beta:</strong>
-            <span className="text-purple-800 ml-2">
-              Measures how much your portfolio moves with the market. Beta of 1.0 = moves with market, &gt;1.0 = more volatile, &lt;1.0 = less volatile.
-            </span>
+          <div className="bg-white/70 p-4 rounded-lg">
+            <strong className="text-purple-900 text-base">Beta (β)</strong>
+            <p className="text-purple-800 mt-2 leading-relaxed">
+              Measures how much your portfolio moves relative to the overall market (S&P 500). It represents your portfolio's sensitivity to market-wide movements.
+            </p>
+            <div className="mt-2 pl-4 border-l-4 border-purple-300">
+              <p className="text-purple-700 font-semibold">Beta Values:</p>
+              <ul className="text-purple-800 mt-1 space-y-1">
+                <li>• β = 1.0: Moves exactly with the market (e.g., S&P 500 index fund)</li>
+                <li>• β &gt; 1.0: More volatile than market (amplifies gains AND losses)</li>
+                <li>• β &lt; 1.0: Less volatile than market (defensive portfolio)</li>
+                <li>• β = 0: No correlation with market movements</li>
+                <li>• β &lt; 0: Moves opposite to market (rare, often gold or inverse ETFs)</li>
+              </ul>
+              <p className="text-purple-700 font-semibold mt-2">Example:</p>
+              <p className="text-purple-800 mt-1">
+                A beta of 1.3 means if the market rises 10%, your portfolio is expected to rise ~13%. But if the market falls 10%, you'd fall ~13%. A tech-heavy portfolio might have β = 1.4, while a utility-heavy one might have β = 0.7.
+              </p>
+            </div>
           </div>
         </div>
       </div>

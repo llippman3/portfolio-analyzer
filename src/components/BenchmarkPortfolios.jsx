@@ -1,10 +1,16 @@
 import React, { useState, useEffect } from 'react';
-import { TrendingUp, BarChart3, Activity, Loader, AlertCircle } from 'lucide-react';
+import { TrendingUp, BarChart3, Activity, Loader, AlertCircle, Upload, FileText } from 'lucide-react';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import Papa from 'papaparse';
 
 const BenchmarkPortfolios = ({ userPortfolioMetrics }) => {
   const [benchmarkData, setBenchmarkData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [csvFile, setCsvFile] = useState(null);
+  const [transactionData, setTransactionData] = useState(null);
+  const [performanceData, setPerformanceData] = useState(null);
+  const [loadingPerformance, setLoadingPerformance] = useState(false);
 
   const benchmarks = [
     {
@@ -96,6 +102,176 @@ const BenchmarkPortfolios = ({ userPortfolioMetrics }) => {
     return better ? 'text-green-600' : 'text-red-600';
   };
 
+  const handleCSVUpload = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      setCsvFile(file);
+      parseCSV(file);
+    }
+  };
+
+  const parseCSV = async (file) => {
+    Papa.parse(file, {
+      header: true,
+      skipEmptyLines: true,
+      complete: (results) => {
+        console.log('📋 CSV Headers:', results.meta.fields);
+        console.log('📊 Total transactions parsed:', results.data.length);
+        
+        const transactions = results.data;
+        
+        // Find date range from transactions
+        const dates = transactions
+          .map(tx => tx['Activity Date'] || tx['Process Date'])
+          .filter(d => d && d.trim())
+          .map(d => new Date(d))
+          .filter(d => !isNaN(d.getTime()));
+        
+        const startDate = dates.length > 0 ? new Date(Math.min(...dates)) : null;
+        const endDate = dates.length > 0 ? new Date(Math.max(...dates)) : null;
+        
+        console.log('📅 Transaction date range:', {
+          start: startDate?.toLocaleDateString(),
+          end: endDate?.toLocaleDateString(),
+          startISO: startDate?.toISOString(),
+          endISO: endDate?.toISOString(),
+          days: startDate && endDate ? Math.ceil((endDate - startDate) / (1000 * 60 * 60 * 24)) : 0
+        });
+        
+        // Calculate holdings from transactions
+        const holdingsMap = {};
+        transactions.forEach(tx => {
+          const symbol = tx.Instrument?.trim();
+          const quantity = parseFloat(tx.Quantity?.replace(/[,()]/g, '') || '0') || 0;
+          const transCode = tx['Trans Code']?.trim();
+          
+          // Skip non-stock transactions
+          if (!symbol || symbol.includes('ACH') || symbol.includes('Cash') || symbol.includes('Deposit') || symbol.includes('Event')) {
+            return;
+          }
+          
+          // Skip options (they have description fields with call/put in them)
+          const description = tx.Description?.toLowerCase() || '';
+          if (description.includes('call') || description.includes('put')) {
+            return;
+          }
+          
+          if (!holdingsMap[symbol]) {
+            holdingsMap[symbol] = 0;
+          }
+          
+          // Handle different transaction types
+          if (transCode && transCode.toLowerCase().includes('buy')) {
+            holdingsMap[symbol] += Math.abs(quantity);
+          } else if (transCode && transCode.toLowerCase().includes('sell')) {
+            holdingsMap[symbol] -= Math.abs(quantity);
+          }
+        });
+        
+        console.log('📊 Holdings map:', holdingsMap);
+        
+        // Convert to holdings array, filter out zero/negative positions
+        const holdings = Object.entries(holdingsMap)
+          .filter(([symbol, shares]) => shares > 0.001) // Small threshold for rounding
+          .map(([symbol, shares]) => ({ symbol, shares: Math.abs(shares) }));
+        
+        console.log('✅ Final holdings:', holdings);
+        
+        setTransactionData(holdings);
+        
+        if (holdings.length === 0) {
+          setError('No valid holdings found in CSV. Make sure your CSV has columns: Instrument, Quantity, Trans Code');
+          return;
+        }
+        
+        // Automatically fetch performance data with date range
+        fetchPerformanceData(holdings, startDate, endDate);
+      },
+      error: (error) => {
+        console.error('CSV parsing error:', error);
+        setError('Failed to parse CSV file');
+      }
+    });
+  };
+
+  const fetchPerformanceData = async (holdings, startDate, endDate) => {
+    setLoadingPerformance(true);
+    setError(null);
+    
+    console.log('🔍 Fetching performance with date range:', {
+      startDate: startDate?.toISOString(),
+      endDate: endDate?.toISOString(),
+      holdingsCount: holdings.length
+    });
+    
+    try {
+      const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
+      
+      // Fetch user portfolio performance
+      const portfolioResponse = await fetch(`${API_BASE_URL}/portfolio-performance-history`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          holdings,
+          startDate: startDate?.toISOString(),
+          endDate: endDate?.toISOString()
+        })
+      });
+      
+      const portfolioResult = await portfolioResponse.json();
+      
+      if (!portfolioResult.success) {
+        throw new Error(portfolioResult.error);
+      }
+      
+      // Fetch benchmark performances with same date range
+      const benchmarkSymbols = benchmarks.flatMap(cat => cat.portfolios.map(p => p.symbol));
+      const benchmarkPromises = benchmarkSymbols.map(async (symbol) => {
+        const url = new URL(`${API_BASE_URL}/benchmark-history/${symbol}`);
+        if (startDate) url.searchParams.append('startDate', startDate.toISOString());
+        if (endDate) url.searchParams.append('endDate', endDate.toISOString());
+        
+        const response = await fetch(url);
+        const result = await response.json();
+        return result.success ? result.data : null;
+      });
+      
+      const benchmarkResults = (await Promise.all(benchmarkPromises)).filter(r => r !== null);
+      
+      // Merge all data by date and convert to percentages
+      const userHistory = portfolioResult.data.history;
+      const startValue = userHistory[0]?.value || 100;
+      
+      const mergedData = userHistory.map((point, index) => {
+        // Convert to percentage gain/loss from start
+        const dataPoint = {
+          date: point.date,
+          'Your Portfolio': ((point.value - startValue) / startValue) * 100
+        };
+        
+        // Add benchmark values for this date (also as percentages)
+        benchmarkResults.forEach(benchmark => {
+          if (benchmark.history[index]) {
+            const benchStartValue = benchmark.history[0]?.value || 100;
+            const benchValue = benchmark.history[index].value;
+            dataPoint[benchmark.symbol] = ((benchValue - benchStartValue) / benchStartValue) * 100;
+          }
+        });
+        
+        return dataPoint;
+      });
+      
+      setPerformanceData(mergedData);
+      console.log(`✅ Performance data loaded: ${mergedData.length} data points`);
+      
+    } catch (err) {
+      console.error('Error fetching performance data:', err);
+      setError(`Failed to load performance data: ${err.message}`);
+    } finally {
+      setLoadingPerformance(false);
+    }
+  };
+
   if (!userPortfolioMetrics) {
     return (
       <div className="container mx-auto px-4 py-8">
@@ -140,6 +316,133 @@ const BenchmarkPortfolios = ({ userPortfolioMetrics }) => {
         <p className="text-gray-600">
           Compare your portfolio's performance against standard allocation benchmarks
         </p>
+      </div>
+
+      {/* CSV Upload Section for Performance Comparison */}
+      <div className="card mb-8">
+        <div className="flex items-center gap-3 mb-6">
+          <BarChart3 className="w-8 h-8 text-primary-600" />
+          <div>
+            <h2 className="text-2xl font-bold text-gray-800">📈 Performance Comparison Chart</h2>
+            <p className="text-sm text-gray-600">Upload your transaction history to see your portfolio vs benchmarks (based on your actual transaction dates)</p>
+          </div>
+        </div>
+
+        {!transactionData && (
+          <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-primary-500 transition-all">
+            <input
+              type="file"
+              id="csv-upload"
+              accept=".csv"
+              onChange={handleCSVUpload}
+              className="hidden"
+            />
+            <label
+              htmlFor="csv-upload"
+              className="cursor-pointer flex flex-col items-center gap-3"
+            >
+              <Upload className="w-12 h-12 text-gray-400" />
+              <div>
+                <p className="text-lg font-semibold text-gray-700">
+                  {csvFile ? csvFile.name : 'Click to upload CSV transaction history'}
+                </p>
+                <p className="text-sm text-gray-500 mt-1">
+                  CSV format with columns: Instrument, Quantity, Trans Code
+                </p>
+              </div>
+            </label>
+          </div>
+        )}
+
+        {transactionData && (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between p-4 bg-green-50 border border-green-200 rounded-lg">
+              <div className="flex items-center gap-3">
+                <FileText className="w-5 h-5 text-green-600" />
+                <div>
+                  <p className="font-semibold text-green-900">CSV Loaded: {csvFile?.name}</p>
+                  <p className="text-sm text-green-700">{transactionData.length} holdings detected</p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setCsvFile(null);
+                  setTransactionData(null);
+                  setPerformanceData(null);
+                }}
+                className="text-sm px-3 py-1 bg-green-100 hover:bg-green-200 text-green-700 rounded transition-colors"
+              >
+                Remove
+              </button>
+            </div>
+
+            {loadingPerformance && (
+              <div className="flex items-center justify-center gap-3 p-8">
+                <Loader className="w-8 h-8 text-primary-600 animate-spin" />
+                <p className="text-lg text-gray-700">Loading performance data...</p>
+              </div>
+            )}
+
+            {performanceData && !loadingPerformance && (
+              <div>
+                <h3 className="text-xl font-bold text-gray-800 mb-4">Performance Comparison</h3>
+                <p className="text-sm text-gray-600 mb-4">
+                  Percentage return from {new Date(performanceData[0]?.date).toLocaleDateString()} to {new Date(performanceData[performanceData.length - 1]?.date).toLocaleDateString()} 
+                  ({performanceData.length} days)
+                </p>
+                
+                <ResponsiveContainer width="100%" height={500}>
+                  <LineChart data={performanceData}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis 
+                      dataKey="date" 
+                      tick={{ fontSize: 12 }}
+                      tickFormatter={(date) => new Date(date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                    />
+                    <YAxis 
+                      tick={{ fontSize: 12 }}
+                      tickFormatter={(value) => `${value.toFixed(1)}%`}
+                    />
+                    <Tooltip 
+                      formatter={(value) => `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`}
+                      labelFormatter={(date) => new Date(date).toLocaleDateString()}
+                    />
+                    <Legend />
+                    
+                    {/* Your Portfolio - Bold Green Line */}
+                    <Line 
+                      type="monotone" 
+                      dataKey="Your Portfolio" 
+                      stroke="#10b981" 
+                      strokeWidth={3}
+                      dot={false}
+                    />
+                    
+                    {/* Benchmark Lines - Thinner Gray Lines */}
+                    <Line type="monotone" dataKey="VASIX" stroke="#9ca3af" strokeWidth={1.5} dot={false} />
+                    <Line type="monotone" dataKey="AOK" stroke="#6b7280" strokeWidth={1.5} dot={false} />
+                    <Line type="monotone" dataKey="VSCGX" stroke="#4b5563" strokeWidth={1.5} dot={false} />
+                    <Line type="monotone" dataKey="AOM" stroke="#374151" strokeWidth={1.5} dot={false} />
+                    <Line type="monotone" dataKey="VSMGX" stroke="#1f2937" strokeWidth={1.5} dot={false} />
+                    <Line type="monotone" dataKey="AOR" stroke="#111827" strokeWidth={1.5} dot={false} />
+                    <Line type="monotone" dataKey="VASGX" stroke="#000000" strokeWidth={1.5} dot={false} />
+                    <Line type="monotone" dataKey="AOA" stroke="#ef4444" strokeWidth={1.5} dot={false} />
+                  </LineChart>
+                </ResponsiveContainer>
+
+                <div className="mt-6 p-4 bg-gray-50 rounded-lg">
+                  <h4 className="font-semibold text-gray-800 mb-2">💡 How to Read This Chart</h4>
+                  <ul className="text-sm text-gray-600 space-y-1">
+                    <li>• <strong className="text-green-600">Green Line:</strong> Your portfolio's percentage return</li>
+                    <li>• <strong className="text-gray-600">Gray/Black Lines:</strong> Benchmark funds for comparison</li>
+                    <li>• All portfolios start at 0% (first transaction date)</li>
+                    <li>• Positive % = gains, Negative % = losses</li>
+                  </ul>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Your Portfolio Summary */}
