@@ -396,8 +396,8 @@ app.post('/api/parse-statement', upload.single('statement'), async (req, res) =>
     {
       "symbol": "<stock symbol>",
       "shares": <number of shares>,
-      "costBasis": <cost basis per share>,
-      "currentPrice": <current price>,
+      "costBasis": <cost basis per share OR average price per share>,
+      "currentPrice": <current price OR market value per share>,
       "totalValue": <total value of holding>,
       "gainLoss": <gain/loss amount>,
       "gainLossPercent": <gain/loss percentage>
@@ -413,9 +413,11 @@ app.post('/api/parse-statement', upload.single('statement'), async (req, res) =>
 IMPORTANT:
 - Extract all numeric values as numbers (no $ or % symbols)
 - If a value is not visible or cannot be determined, use null
+- For "costBasis", look for: "Cost Basis", "Avg Cost", "Average Price", "Avg Price", "Purchase Price"
+- For "currentPrice", look for: "Current Price", "Market Price", "Last Price", "Price"
 - Be precise with the numbers
-- Include all visible holdings
-- Calculate totals if they're not explicitly shown`;
+- Include ALL visible holdings/stocks/securities
+- If totals are not shown, set them to null (we'll calculate them)`;
 
     const result = await model.generateContent([
       prompt,
@@ -439,6 +441,76 @@ IMPORTANT:
     } catch (parseError) {
       // If JSON parsing fails, return the raw text
       parsedData = { rawResponse: text };
+    }
+
+    // POST-PROCESS: Calculate missing values
+    if (parsedData.holdings && Array.isArray(parsedData.holdings)) {
+      console.log('📊 Post-processing holdings to calculate missing values...');
+      
+      parsedData.holdings = parsedData.holdings.map(holding => {
+        // Calculate totalValue if missing (shares × currentPrice)
+        if (!holding.totalValue && holding.shares && holding.currentPrice) {
+          holding.totalValue = holding.shares * holding.currentPrice;
+          console.log(`  ✓ ${holding.symbol}: Calculated totalValue = ${holding.totalValue.toFixed(2)}`);
+        }
+
+        // Calculate total cost basis if missing (shares × costBasis per share)
+        if (holding.shares && holding.costBasis && !holding.totalCostBasis) {
+          holding.totalCostBasis = holding.shares * holding.costBasis;
+        }
+
+        // Calculate gainLoss if missing (totalValue - totalCostBasis)
+        if (!holding.gainLoss && holding.totalValue && holding.totalCostBasis) {
+          holding.gainLoss = holding.totalValue - holding.totalCostBasis;
+          console.log(`  ✓ ${holding.symbol}: Calculated gainLoss = ${holding.gainLoss.toFixed(2)}`);
+        } else if (!holding.gainLoss && holding.totalValue && holding.shares && holding.costBasis) {
+          holding.gainLoss = holding.totalValue - (holding.shares * holding.costBasis);
+          console.log(`  ✓ ${holding.symbol}: Calculated gainLoss = ${holding.gainLoss.toFixed(2)}`);
+        }
+
+        // Calculate gainLossPercent if missing
+        if (!holding.gainLossPercent && holding.gainLoss && holding.totalCostBasis) {
+          holding.gainLossPercent = (holding.gainLoss / holding.totalCostBasis) * 100;
+          console.log(`  ✓ ${holding.symbol}: Calculated gainLossPercent = ${holding.gainLossPercent.toFixed(2)}%`);
+        } else if (!holding.gainLossPercent && holding.gainLoss && holding.shares && holding.costBasis) {
+          const costBasisTotal = holding.shares * holding.costBasis;
+          if (costBasisTotal > 0) {
+            holding.gainLossPercent = (holding.gainLoss / costBasisTotal) * 100;
+            console.log(`  ✓ ${holding.symbol}: Calculated gainLossPercent = ${holding.gainLossPercent.toFixed(2)}%`);
+          }
+        }
+
+        return holding;
+      });
+
+      // Calculate portfolio totals if missing
+      if (!parsedData.totalValue || parsedData.totalValue === null) {
+        parsedData.totalValue = parsedData.holdings.reduce((sum, h) => sum + (h.totalValue || 0), 0);
+        console.log(`  ✓ Calculated portfolio totalValue = ${parsedData.totalValue.toFixed(2)}`);
+      }
+
+      if (!parsedData.totalCostBasis || parsedData.totalCostBasis === null) {
+        parsedData.totalCostBasis = parsedData.holdings.reduce((sum, h) => {
+          if (h.totalCostBasis) return sum + h.totalCostBasis;
+          if (h.shares && h.costBasis) return sum + (h.shares * h.costBasis);
+          return sum;
+        }, 0);
+        console.log(`  ✓ Calculated portfolio totalCostBasis = ${parsedData.totalCostBasis.toFixed(2)}`);
+      }
+
+      if ((!parsedData.unrealizedGainLoss || parsedData.unrealizedGainLoss === null) && 
+          parsedData.totalValue && parsedData.totalCostBasis) {
+        parsedData.unrealizedGainLoss = parsedData.totalValue - parsedData.totalCostBasis;
+        console.log(`  ✓ Calculated unrealizedGainLoss = ${parsedData.unrealizedGainLoss.toFixed(2)}`);
+      }
+
+      if ((!parsedData.unrealizedGainLossPercent || parsedData.unrealizedGainLossPercent === null) && 
+          parsedData.unrealizedGainLoss && parsedData.totalCostBasis && parsedData.totalCostBasis > 0) {
+        parsedData.unrealizedGainLossPercent = (parsedData.unrealizedGainLoss / parsedData.totalCostBasis) * 100;
+        console.log(`  ✓ Calculated unrealizedGainLossPercent = ${parsedData.unrealizedGainLossPercent.toFixed(2)}%`);
+      }
+
+      console.log('✅ Post-processing complete!');
     }
 
     // Clean up uploaded file
@@ -490,10 +562,10 @@ app.post('/api/calculate-portfolio-stddev', async (req, res) => {
 
     console.log(`\n📊 STEP 1: Fetching historical data for ${holdings.length} stocks...`);
     
-    // STEP 1: Fetch historical price data for all stocks (1 year = 252 trading days)
+    // STEP 1: Fetch historical price data for all stocks (5 years for more stable standard deviation)
     const endDate = new Date();
     const startDate = new Date();
-    startDate.setFullYear(endDate.getFullYear() - 1);
+    startDate.setFullYear(endDate.getFullYear() - 5);
     
     const historicalDataPromises = holdings.map(async (holding) => {
       try {
@@ -553,10 +625,10 @@ app.post('/api/calculate-portfolio-stddev', async (req, res) => {
       const squaredDiffs = stock.returns.map(r => Math.pow(r - mean, 2));
       const variance = squaredDiffs.reduce((sum, sd) => sum + sd, 0) / (stock.returns.length - 1);
       
-      // Daily standard deviation
+      // Daily standard deviation (from 5 years of data)
       const dailyStdDev = Math.sqrt(variance);
       
-      // Annualized standard deviation (multiply by √252)
+      // Annualized standard deviation (multiply by √252 trading days)
       const annualizedStdDev = dailyStdDev * Math.sqrt(252);
       
       console.log(`  ${stock.symbol}: σ = ${(annualizedStdDev * 100).toFixed(2)}%`);
@@ -740,8 +812,29 @@ app.post('/api/calculate-portfolio-metrics', async (req, res) => {
     
     const endDate = new Date();
     const startDate = new Date();
-    startDate.setFullYear(endDate.getFullYear() - 1);
+    startDate.setFullYear(endDate.getFullYear() - 5);
     
+    // Fetch S&P 500 historical data for beta calculation (5-year monthly to match Yahoo Finance)
+    const betaEndDate = new Date();
+    const betaStartDate = new Date();
+    betaStartDate.setFullYear(betaEndDate.getFullYear() - 5);
+    
+    const spyHistoryBeta = await yahooFinance.historical('SPY', {
+      period1: betaStartDate,
+      period2: betaEndDate,
+      interval: '1mo' // Monthly intervals to match Yahoo Finance beta calculation
+    });
+    
+    const spyPricesBeta = spyHistoryBeta.map(h => h.close);
+    const spyReturnsBeta = [];
+    for (let i = 1; i < spyPricesBeta.length; i++) {
+      spyReturnsBeta.push((spyPricesBeta[i] - spyPricesBeta[i - 1]) / spyPricesBeta[i - 1]);
+    }
+    const spyMeanBeta = spyReturnsBeta.reduce((sum, r) => sum + r, 0) / spyReturnsBeta.length;
+    const spyVarianceBeta = spyReturnsBeta.reduce((sum, r) => sum + Math.pow(r - spyMeanBeta, 2), 0) / (spyReturnsBeta.length - 1);
+    
+    console.log(`📊 Using 5Y monthly data for beta calculation (${spyReturnsBeta.length} months, matching Yahoo Finance methodology)`);
+
     const holdingsDataPromises = holdings.map(async (holding) => {
       try {
         const weight = (holding.totalValue || 0) / portfolioTotalValue;
@@ -757,18 +850,111 @@ app.post('/api/calculate-portfolio-metrics', async (req, res) => {
         if (history && history.length >= 2) {
           const oldPrice = history[0].close;
           const newPrice = history[history.length - 1].close;
-          stockReturn = (newPrice - oldPrice) / oldPrice;
+          const totalReturn = (newPrice - oldPrice) / oldPrice;
+          
+          // Calculate number of years for annualization
+          const startDateActual = new Date(history[0].date);
+          const endDateActual = new Date(history[history.length - 1].date);
+          const yearsElapsed = (endDateActual - startDateActual) / (1000 * 60 * 60 * 24 * 365.25);
+          
+          // Annualized return = [(1 + total return) ^ (1 / years)] - 1
+          stockReturn = Math.pow(1 + totalReturn, 1 / yearsElapsed) - 1;
         }
         
-        // Get beta
-        let beta = 1.0;
+        // Get pre-calculated 5-year statistics from Yahoo Finance
+        let beta = null;
+        let alpha = null;
+        let sharpeRatio = null;
+        let treynorRatio = null;
+        let stdDev = null;
+        let rSquared = null;
+        let dataSource = 'yahoo-5y';
+        
         try {
           const summary = await yahooFinance.quoteSummary(holding.symbol, {
-            modules: ['defaultKeyStatistics']
+            modules: ['fundPerformance', 'defaultKeyStatistics']
           });
-          beta = summary.defaultKeyStatistics?.beta || 1.0;
+          
+          // Try to get 5-year risk statistics first (most comprehensive)
+          const riskStats5y = summary.fundPerformance?.riskOverviewStatistics?.riskStatistics?.find(r => r.year === '5y');
+          
+          if (riskStats5y) {
+            beta = riskStats5y.beta;
+            alpha = riskStats5y.alpha / 100; // Yahoo shows as percentage
+            sharpeRatio = riskStats5y.sharpeRatio;
+            treynorRatio = riskStats5y.treynorRatio / 100; // Yahoo shows as percentage
+            stdDev = riskStats5y.stdDev / 100; // Yahoo shows as percentage
+            rSquared = riskStats5y.rSquared / 100; // Yahoo shows as percentage
+            
+            console.log(`  📊 Using Yahoo Finance 5Y statistics for ${holding.symbol}: β=${beta.toFixed(3)}, α=${(alpha * 100).toFixed(2)}%, σ=${(stdDev * 100).toFixed(2)}%, Sharpe=${sharpeRatio.toFixed(3)}`);
+          } else {
+            // Fallback to beta3Year for ETFs or beta for stocks
+            beta = summary.defaultKeyStatistics?.beta || summary.defaultKeyStatistics?.beta3Year;
+            dataSource = 'yahoo-beta';
+            
+            if (beta && !isNaN(beta)) {
+              console.log(`  📊 Using Yahoo Finance beta for ${holding.symbol}: ${beta.toFixed(3)} (full risk stats not available)`);
+            }
+          }
         } catch (e) {
-          console.log(`  Using default beta for ${holding.symbol}`);
+          console.log(`  ⚠️  Yahoo Finance data not available for ${holding.symbol}`);
+        }
+        
+        // If beta not available from Yahoo (e.g., crypto), calculate it ourselves using 5Y monthly data
+        if (!beta || isNaN(beta)) {
+          dataSource = 'calculated';
+          try {
+            // Fetch 5-year monthly data for this stock to match Yahoo Finance methodology
+            const stockHistoryBeta = await yahooFinance.historical(holding.symbol, {
+              period1: betaStartDate,
+              period2: betaEndDate,
+              interval: '1mo'
+            });
+            
+            const stockPricesBeta = stockHistoryBeta.map(h => h.close);
+            const stockReturnsBeta = [];
+            for (let i = 1; i < stockPricesBeta.length; i++) {
+              stockReturnsBeta.push((stockPricesBeta[i] - stockPricesBeta[i - 1]) / stockPricesBeta[i - 1]);
+            }
+            
+            // Calculate beta = Covariance(stock, market) / Variance(market)
+            const stockMeanBeta = stockReturnsBeta.reduce((sum, r) => sum + r, 0) / stockReturnsBeta.length;
+            const minLength = Math.min(stockReturnsBeta.length, spyReturnsBeta.length);
+            
+            let covariance = 0;
+            for (let i = 0; i < minLength; i++) {
+              covariance += (stockReturnsBeta[i] - stockMeanBeta) * (spyReturnsBeta[i] - spyMeanBeta);
+            }
+            covariance = covariance / (minLength - 1);
+            
+            beta = covariance / spyVarianceBeta;
+            console.log(`  📊 Calculated 5Y monthly beta for ${holding.symbol}: ${beta.toFixed(3)} (${minLength} months)`);
+          } catch (err) {
+            console.log(`  ⚠️  Could not calculate 5Y monthly beta for ${holding.symbol}, defaulting to 1.0`);
+            beta = 1.0;
+            dataSource = 'default';
+          }
+        }
+        
+        // If stdDev not available from Yahoo, calculate it from 5-year daily data
+        if (!stdDev || isNaN(stdDev)) {
+          try {
+            const prices = history.map(h => h.close);
+            const returns = [];
+            for (let i = 1; i < prices.length; i++) {
+              returns.push((prices[i] - prices[i - 1]) / prices[i - 1]);
+            }
+            
+            // Calculate standard deviation
+            const mean = returns.reduce((sum, r) => sum + r, 0) / returns.length;
+            const variance = returns.reduce((sum, r) => sum + Math.pow(r - mean, 2), 0) / (returns.length - 1);
+            const dailyStdDev = Math.sqrt(variance);
+            stdDev = dailyStdDev * Math.sqrt(252); // Annualize
+            
+            console.log(`  📊 Calculated 5Y standard deviation for ${holding.symbol}: ${(stdDev * 100).toFixed(2)}% (from ${returns.length} days)`);
+          } catch (err) {
+            console.log(`  ⚠️  Could not calculate standard deviation for ${holding.symbol}`);
+          }
         }
         
         console.log(`  ✓ ${holding.symbol}: ${(weight * 100).toFixed(2)}% weight, ${(stockReturn * 100).toFixed(2)}% return, β=${beta.toFixed(2)}`);
@@ -779,6 +965,12 @@ app.post('/api/calculate-portfolio-metrics', async (req, res) => {
           totalValue: holding.totalValue,
           stockReturn: stockReturn,
           beta: beta,
+          alpha: alpha, // Yahoo Finance 5Y alpha
+          sharpeRatio: sharpeRatio, // Yahoo Finance 5Y Sharpe Ratio
+          treynorRatio: treynorRatio, // Yahoo Finance 5Y Treynor Ratio
+          stdDev: stdDev, // Yahoo Finance 5Y standard deviation
+          rSquared: rSquared, // Yahoo Finance 5Y R-squared
+          dataSource: dataSource, // 'yahoo-5y', 'yahoo-beta', 'calculated', or 'default'
           prices: history.map(h => h.close)
         };
       } catch (error) {
@@ -801,7 +993,7 @@ app.post('/api/calculate-portfolio-metrics', async (req, res) => {
     // STEP 4: Calculate portfolio return (weighted average of stock returns)
     console.log('\n📊 STEP 4: Calculating portfolio return...');
     const portfolioReturn = holdingsData.reduce((sum, h) => sum + (h.stockReturn * h.weight), 0);
-    console.log(`  ✓ Portfolio Return (1-year): ${(portfolioReturn * 100).toFixed(2)}%`);
+    console.log(`  ✓ Portfolio Return (annualized 5Y): ${(portfolioReturn * 100).toFixed(2)}%`);
 
     // STEP 5: Calculate portfolio standard deviation
     console.log('\n📊 STEP 5: Calculating portfolio standard deviation...');
@@ -903,7 +1095,7 @@ app.post('/api/calculate-portfolio-metrics', async (req, res) => {
         riskFreeRate: riskFreeRate,
         riskFreeRatePercent: riskFreeRate * 100,
         
-        // Holdings details
+        // Holdings details (with Yahoo Finance 5Y statistics)
         holdings: holdingsData.map(h => ({
           symbol: h.symbol,
           weight: h.weight,
@@ -911,7 +1103,17 @@ app.post('/api/calculate-portfolio-metrics', async (req, res) => {
           totalValue: h.totalValue,
           stockReturn: h.stockReturn,
           stockReturnPercent: h.stockReturn * 100,
-          beta: h.beta
+          // Yahoo Finance 5-year statistics
+          beta: h.beta,
+          alpha: h.alpha,
+          alphaPercent: h.alpha ? h.alpha * 100 : null,
+          sharpeRatio: h.sharpeRatio,
+          treynorRatio: h.treynorRatio,
+          treynorRatioPercent: h.treynorRatio ? h.treynorRatio * 100 : null,
+          stdDev: h.stdDev,
+          stdDevPercent: h.stdDev ? h.stdDev * 100 : null,
+          rSquared: h.rSquared,
+          dataSource: h.dataSource // indicates source of statistics
         })),
         
         // Additional info
@@ -923,6 +1125,223 @@ app.post('/api/calculate-portfolio-metrics', async (req, res) => {
 
   } catch (error) {
     console.error('Error calculating portfolio metrics:', error.message);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/benchmark/:symbol
+ * Get comprehensive metrics for a single benchmark fund
+ */
+app.get('/api/benchmark/:symbol', async (req, res) => {
+  try {
+    const { symbol } = req.params;
+    console.log(`\n🎯 Fetching benchmark metrics for ${symbol}...`);
+
+    // Fetch current quote to get price
+    const quote = await yahooFinance.quote(symbol);
+    
+    if (!quote || !quote.regularMarketPrice) {
+      throw new Error(`No data available for ${symbol}`);
+    }
+
+    const currentPrice = quote.regularMarketPrice;
+    
+    // Create a mock holding with $10,000 investment
+    const holdings = [{
+      symbol: symbol,
+      shares: 10000 / currentPrice,
+      totalValue: 10000
+    }];
+
+    const portfolioTotalValue = 10000;
+    const totalCostBasis = 10000;
+
+    // Calculate time period (5 years)
+    const endDate = new Date();
+    const startDate = new Date();
+    startDate.setFullYear(startDate.getFullYear() - 5);
+    
+    const betaStartDate = new Date();
+    betaStartDate.setFullYear(betaStartDate.getFullYear() - 5);
+    const betaEndDate = new Date();
+
+    console.log(`📊 Fetching 5-year data for ${symbol}...`);
+
+    // Fetch 5-year historical data
+    const history = await yahooFinance.historical(symbol, {
+      period1: startDate,
+      period2: endDate,
+      interval: '1d'
+    });
+
+    if (history.length < 100) {
+      console.log(`⚠️  Insufficient data for ${symbol}: only ${history.length} days`);
+    }
+
+    // Calculate annualized return from 5-year data
+    const startPrice = history[0].close;
+    const endPrice = history[history.length - 1].close;
+    const years = history.length / 252; // Trading days per year
+    const stockReturn = Math.pow(endPrice / startPrice, 1 / years) - 1;
+
+    // Get Yahoo Finance 5-year statistics
+    let beta = null;
+    let alpha = null;
+    let sharpeRatio = null;
+    let treynorRatio = null;
+    let stdDev = null;
+    let rSquared = null;
+    let dataSource = 'yahoo-5y';
+
+    try {
+      const summary = await yahooFinance.quoteSummary(symbol, {
+        modules: ['fundPerformance', 'defaultKeyStatistics']
+      });
+
+      const riskStats5y = summary.fundPerformance?.riskOverviewStatistics?.riskStatistics?.find(r => r.year === '5y');
+
+      if (riskStats5y) {
+        beta = riskStats5y.beta;
+        alpha = riskStats5y.alpha / 100;
+        sharpeRatio = riskStats5y.sharpeRatio;
+        treynorRatio = riskStats5y.treynorRatio / 100;
+        stdDev = riskStats5y.stdDev / 100;
+        rSquared = riskStats5y.rSquared / 100;
+
+        console.log(`  📊 Using Yahoo Finance 5Y statistics for ${symbol}: β=${beta?.toFixed(3)}, α=${(alpha * 100)?.toFixed(2)}%, σ=${(stdDev * 100)?.toFixed(2)}%, Sharpe=${sharpeRatio?.toFixed(3)}`);
+      } else {
+        beta = summary.defaultKeyStatistics?.beta || summary.defaultKeyStatistics?.beta3Year;
+        dataSource = 'yahoo-beta';
+
+        if (beta && !isNaN(beta)) {
+          console.log(`  📊 Using Yahoo Finance beta for ${symbol}: ${beta.toFixed(3)}`);
+        }
+      }
+    } catch (e) {
+      console.log(`  ⚠️  Yahoo Finance data not available for ${symbol}`);
+    }
+
+    // Calculate standard deviation if not available from Yahoo
+    if (!stdDev || isNaN(stdDev)) {
+      const prices = history.map(h => h.close);
+      const returns = [];
+      for (let i = 1; i < prices.length; i++) {
+        returns.push((prices[i] - prices[i - 1]) / prices[i - 1]);
+      }
+
+      const mean = returns.reduce((sum, r) => sum + r, 0) / returns.length;
+      const variance = returns.reduce((sum, r) => sum + Math.pow(r - mean, 2), 0) / (returns.length - 1);
+      const dailyStdDev = Math.sqrt(variance);
+      stdDev = dailyStdDev * Math.sqrt(252);
+
+      console.log(`  📊 Calculated 5Y standard deviation for ${symbol}: ${(stdDev * 100).toFixed(2)}%`);
+    }
+
+    // Calculate beta if not available
+    if (!beta || isNaN(beta)) {
+      dataSource = 'calculated';
+      
+      // Fetch SPY data for beta calculation
+      const spyHistoryBeta = await yahooFinance.historical('^GSPC', {
+        period1: betaStartDate,
+        period2: betaEndDate,
+        interval: '1mo'
+      });
+
+      const spyPricesBeta = spyHistoryBeta.map(h => h.close);
+      const spyReturnsBeta = [];
+      for (let i = 1; i < spyPricesBeta.length; i++) {
+        spyReturnsBeta.push((spyPricesBeta[i] - spyPricesBeta[i - 1]) / spyPricesBeta[i - 1]);
+      }
+      const spyMeanBeta = spyReturnsBeta.reduce((sum, r) => sum + r, 0) / spyReturnsBeta.length;
+      let spyVarianceBeta = 0;
+      for (let i = 0; i < spyReturnsBeta.length; i++) {
+        spyVarianceBeta += Math.pow(spyReturnsBeta[i] - spyMeanBeta, 2);
+      }
+      spyVarianceBeta = spyVarianceBeta / (spyReturnsBeta.length - 1);
+
+      // Fetch stock monthly data
+      const stockHistoryBeta = await yahooFinance.historical(symbol, {
+        period1: betaStartDate,
+        period2: betaEndDate,
+        interval: '1mo'
+      });
+
+      const stockPricesBeta = stockHistoryBeta.map(h => h.close);
+      const stockReturnsBeta = [];
+      for (let i = 1; i < stockPricesBeta.length; i++) {
+        stockReturnsBeta.push((stockPricesBeta[i] - stockPricesBeta[i - 1]) / stockPricesBeta[i - 1]);
+      }
+
+      const stockMeanBeta = stockReturnsBeta.reduce((sum, r) => sum + r, 0) / stockReturnsBeta.length;
+      const minLength = Math.min(stockReturnsBeta.length, spyReturnsBeta.length);
+
+      let covariance = 0;
+      for (let i = 0; i < minLength; i++) {
+        covariance += (stockReturnsBeta[i] - stockMeanBeta) * (spyReturnsBeta[i] - spyMeanBeta);
+      }
+      covariance = covariance / (minLength - 1);
+
+      beta = covariance / spyVarianceBeta;
+      console.log(`  📊 Calculated 5Y monthly beta for ${symbol}: ${beta.toFixed(3)}`);
+    }
+
+    // Get market data for performance metrics
+    const spyQuote = await yahooFinance.quote('^GSPC');
+    const spyHistory = await yahooFinance.historical('^GSPC', {
+      period1: startDate,
+      period2: endDate,
+      interval: '1d'
+    });
+
+    const spyStartPrice = spyHistory[0].close;
+    const spyEndPrice = spyHistory[spyHistory.length - 1].close;
+    const spyYears = spyHistory.length / 252;
+    const marketReturn = Math.pow(spyEndPrice / spyStartPrice, 1 / spyYears) - 1;
+
+    // Get risk-free rate
+    const tnxQuote = await yahooFinance.quote('^TNX');
+    const riskFreeRate = (tnxQuote.regularMarketPrice || 3.83) / 100;
+
+    // Calculate performance metrics
+    const portfolioBeta = beta || 1.0;
+    const portfolioReturn = stockReturn;
+    const portfolioStdDev = stdDev || 0.15;
+
+    const sharpeCalculated = sharpeRatio || (portfolioReturn - riskFreeRate) / portfolioStdDev;
+    const treynorCalculated = treynorRatio || (portfolioReturn - riskFreeRate) / portfolioBeta;
+    const jensensAlpha = alpha || (portfolioReturn - (riskFreeRate + portfolioBeta * (marketReturn - riskFreeRate)));
+
+    console.log(`✅ Metrics calculated for ${symbol}!`);
+
+    res.json({
+      success: true,
+      data: {
+        symbol: symbol,
+        portfolioReturn: portfolioReturn,
+        portfolioReturnPercent: portfolioReturn * 100,
+        portfolioBeta: portfolioBeta,
+        portfolioStdDev: portfolioStdDev,
+        portfolioStdDevPercent: portfolioStdDev * 100,
+        sharpeRatio: sharpeCalculated,
+        treynorRatio: treynorCalculated,
+        jensensAlpha: jensensAlpha,
+        jensensAlphaPercent: jensensAlpha * 100,
+        marketReturn: marketReturn,
+        marketReturnPercent: marketReturn * 100,
+        riskFreeRate: riskFreeRate,
+        riskFreeRatePercent: riskFreeRate * 100,
+        dataSource: dataSource,
+        calculationDate: new Date().toISOString()
+      }
+    });
+
+  } catch (error) {
+    console.error(`Error fetching benchmark data for ${req.params.symbol}:`, error.message);
     res.status(500).json({
       success: false,
       error: error.message

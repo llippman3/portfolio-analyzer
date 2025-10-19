@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { TrendingUp } from 'lucide-react';
+import { TrendingUp, BarChart3, User, LogOut, Loader, LogIn } from 'lucide-react';
 import PortfolioForm from './components/PortfolioForm';
 import MetricsDisplay from './components/MetricsDisplay';
 import BenchmarkComparison from './components/BenchmarkComparison';
@@ -11,6 +11,10 @@ import ExportResults from './components/ExportResults';
 import LiveMarketData from './components/LiveMarketData';
 import StockQuote from './components/StockQuote';
 import StatementUploader from './components/StatementUploader';
+import BenchmarkPortfolios from './components/BenchmarkPortfolios';
+import SavedPortfolios from './components/SavedPortfolios';
+import AuthPage from './components/Auth/AuthPage';
+import { useAuth } from './contexts/AuthContext';
 import {
   calculateSharpeRatio,
   calculateTreynorRatio,
@@ -23,10 +27,16 @@ import {
 } from './utils/calculations';
 
 function App() {
+  const { user, loading: authLoading, signOut } = useAuth();
   const [results, setResults] = useState(null);
   const [portfolioData, setPortfolioData] = useState(null);
   const [returnsData, setReturnsData] = useState(null);
   const [autoFillData, setAutoFillData] = useState(null);
+  const [activeTab, setActiveTab] = useState('portfolio');
+  const [comprehensiveMetrics, setComprehensiveMetrics] = useState(null);
+  const [showUserMenu, setShowUserMenu] = useState(false);
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [loadedPortfolioData, setLoadedPortfolioData] = useState(null);
 
   const handleCalculate = (data) => {
     const sharpeRatio = calculateSharpeRatio(
@@ -103,6 +113,15 @@ function App() {
     }, 100);
   };
 
+  const handleSignOut = async () => {
+    try {
+      await signOut();
+      setShowUserMenu(false);
+    } catch (error) {
+      console.error('Error signing out:', error);
+    }
+  };
+
   return (
     <div className="min-h-screen py-16 px-6">
       <div className="max-w-6xl mx-auto">
@@ -110,9 +129,69 @@ function App() {
         <header className="mb-24">
           <div className="flex items-center justify-between mb-16">
             <div className="w-3 h-3 bg-black rounded-full"></div>
-            <nav className="flex gap-12 text-sm tracking-widest uppercase">
-              <a href="#analysis" className="text-neutral-400 hover:text-black transition-colors">Analysis</a>
-              <a href="#metrics" className="text-neutral-400 hover:text-black transition-colors">Metrics</a>
+            <nav className="flex items-center gap-12 text-sm tracking-widest uppercase">
+              <button 
+                onClick={() => setActiveTab('portfolio')}
+                className={`transition-colors ${
+                  activeTab === 'portfolio' ? 'text-black font-semibold' : 'text-neutral-400 hover:text-black'
+                }`}
+              >
+                Portfolio
+              </button>
+              {user && (
+                <button 
+                  onClick={() => setActiveTab('saved')}
+                  className={`transition-colors ${
+                    activeTab === 'saved' ? 'text-black font-semibold' : 'text-neutral-400 hover:text-black'
+                  }`}
+                >
+                  My Portfolios
+                </button>
+              )}
+              <button 
+                onClick={() => setActiveTab('benchmarks')}
+                className={`transition-colors ${
+                  activeTab === 'benchmarks' ? 'text-black font-semibold' : 'text-neutral-400 hover:text-black'
+                }`}
+              >
+                Benchmarks
+              </button>
+              
+              {/* User Menu / Sign In */}
+              {user ? (
+                <div className="relative">
+                  <button
+                    onClick={() => setShowUserMenu(!showUserMenu)}
+                    className="flex items-center gap-2 text-neutral-400 hover:text-black transition-colors"
+                  >
+                    <User className="w-5 h-5" />
+                  </button>
+                  
+                  {showUserMenu && (
+                    <div className="absolute right-0 mt-2 w-64 bg-white rounded-lg shadow-lg border border-gray-200 py-2 z-50">
+                      <div className="px-4 py-3 border-b border-gray-200">
+                        <p className="text-sm font-semibold text-gray-900">Signed in as</p>
+                        <p className="text-sm text-gray-600 truncate">{user.email}</p>
+                      </div>
+                      <button
+                        onClick={handleSignOut}
+                        className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 flex items-center gap-2"
+                      >
+                        <LogOut className="w-4 h-4" />
+                        Sign Out
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <button
+                  onClick={() => setShowAuthModal(true)}
+                  className="flex items-center gap-2 text-neutral-400 hover:text-black transition-colors"
+                >
+                  <LogIn className="w-5 h-5" />
+                  <span>Sign In</span>
+                </button>
+              )}
             </nav>
           </div>
           
@@ -142,123 +221,140 @@ function App() {
           </div>
         </header>
 
-        <div className="section-divider"></div>
-
-        {/* Live Market Data Widget */}
-        <div className="mb-16">
-          <LiveMarketData onAutoFill={setAutoFillData} />
-        </div>
-
-        <div className="section-divider"></div>
-
-        {/* Stock Quote Tester */}
-        <div className="mb-16">
-          <StockQuote />
-        </div>
-
-        <div className="section-divider"></div>
-
-        {/* Statement Uploader - Gemini AI */}
-        <div className="mb-16">
-          <StatementUploader 
-            onDataExtracted={(data) => {
-              // Auto-fill form with extracted data
-              if (data.calculatedReturn) {
-                setAutoFillData({
-                  portfolioReturn: data.calculatedReturn.toFixed(2)
-                });
-              }
-            }}
-          />
-        </div>
-
-        <div className="section-divider"></div>
-
-        {/* Input Form */}
-        <div id="portfolio-form" className="mb-16">
-          <PortfolioForm onCalculate={handleCalculate} autoFillData={autoFillData} />
-        </div>
-
-        {/* Results Section */}
-        {results && (
-          <div id="results-section" className="space-y-16 scroll-mt-8">
-            <div className="section-divider"></div>
-            
-            {/* Metrics Display */}
-            <div className="animate-fadeIn">
-              <MetricsDisplay results={results} />
-            </div>
-
-            <div className="section-divider"></div>
-
-            {/* Performance Charts */}
-            <div className="animate-fadeIn">
-              <PerformanceCharts 
-                portfolioMetrics={{
-                  ...results,
-                  portfolioReturn: portfolioData.portfolioReturn,
-                  standardDeviation: portfolioData.standardDeviation,
-                  presentValue: portfolioData.presentValue,
-                  years: portfolioData.years
-                }}
-                benchmarkReturn={portfolioData.marketReturn * 100}
-              />
-            </div>
-
-            <div className="section-divider"></div>
-
-            {/* Benchmark Comparison */}
-            <div className="animate-fadeIn">
-              <BenchmarkComparison 
-                riskTolerance={portfolioData.riskTolerance}
-                portfolioMetrics={results}
-              />
-            </div>
-
-            <div className="section-divider"></div>
-
-            {/* Export Results */}
-            <div className="animate-fadeIn">
-              <ExportResults results={results} portfolioData={portfolioData} />
-            </div>
-          </div>
-        )}
-
-        <div className="section-divider"></div>
-
-        {/* Cash Flow Analysis Section */}
-        <div className="mb-16">
-          <div className="mb-8 p-8 bg-black text-white rounded-none">
-            <h3 className="text-2xl font-light mb-4 tracking-wide">Advanced: Calculate Dollar & Time-Weighted Returns</h3>
-            <p className="text-sm text-neutral-300 leading-relaxed">
-              Track your deposits and withdrawals to see how your investment timing affected your actual returns.
-            </p>
-          </div>
-          <CashFlowInput onCalculateReturns={handleCalculateReturns} />
-        </div>
-
-        {/* Returns Display */}
-        {returnsData && (
+        {/* Tab Content */}
+        {activeTab === 'portfolio' && (
           <>
             <div className="section-divider"></div>
-            <div id="returns-section" className="mb-16 animate-fadeIn scroll-mt-8">
-              <ReturnsDisplay
-                dollarWeightedReturn={returnsData.dollarWeightedReturn}
-                timeWeightedReturn={returnsData.timeWeightedReturn}
-                cashFlows={returnsData.cashFlows}
+
+            {/* Live Market Data Widget */}
+            <div className="mb-16">
+              <LiveMarketData onAutoFill={setAutoFillData} />
+            </div>
+
+            <div className="section-divider"></div>
+
+            {/* Statement Uploader - Gemini AI */}
+            <div className="mb-16">
+              {loadedPortfolioData && (
+                <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-semibold text-blue-900">📂 Loaded Portfolio: {loadedPortfolioData.portfolio_name}</p>
+                    <p className="text-xs text-blue-700">Saved on {new Date(loadedPortfolioData.created_at).toLocaleDateString()}</p>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setLoadedPortfolioData(null);
+                      setComprehensiveMetrics(null);
+                    }}
+                    className="text-sm px-3 py-1 bg-blue-100 hover:bg-blue-200 text-blue-700 rounded transition-colors"
+                  >
+                    Clear & Upload New
+                  </button>
+                </div>
+              )}
+              
+              <StatementUploader 
+                onDataExtracted={(data) => {
+                  // Auto-fill form with extracted data
+                  if (data.calculatedReturn) {
+                    setAutoFillData({
+                      portfolioReturn: data.calculatedReturn.toFixed(2)
+                    });
+                  }
+                  // Clear loaded portfolio when uploading new data
+                  setLoadedPortfolioData(null);
+                }}
+                onMetricsCalculated={(metrics) => {
+                  setComprehensiveMetrics(metrics);
+                }}
+                initialData={loadedPortfolioData?.portfolio_data}
               />
             </div>
           </>
         )}
 
-        <div className="section-divider"></div>
+        {activeTab === 'saved' && (
+          <SavedPortfolios 
+            onLoadPortfolio={(portfolio) => {
+              console.log('Loading portfolio:', portfolio);
+              
+              // Load the portfolio data (will be passed to StatementUploader as initialData)
+              setLoadedPortfolioData(portfolio);
+              
+              // Switch to portfolio tab to view the loaded data
+              setActiveTab('portfolio');
+              
+              // Smooth scroll to the top
+              setTimeout(() => {
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+              }, 100);
+            }}
+          />
+        )}
 
-        {/* Educational Content */}
-        <div className="mb-16">
-          <EducationalContent />
-        </div>
+        {activeTab === 'benchmarks' && (
+          <BenchmarkPortfolios userPortfolioMetrics={comprehensiveMetrics} />
+        )}
 
-        <div className="section-divider"></div>
+        {activeTab === 'portfolio' && (
+          <>
+            <div className="section-divider" id="portfolio-form"></div>
+
+            {/* Results Section */}
+            {results && (
+              <div id="results-section" className="space-y-16 scroll-mt-8">
+                <div className="section-divider"></div>
+                
+                {/* Metrics Display */}
+                <div className="animate-fadeIn">
+                  <MetricsDisplay results={results} />
+                </div>
+
+                <div className="section-divider"></div>
+
+                {/* Performance Charts */}
+                <div className="animate-fadeIn">
+                  <PerformanceCharts 
+                    portfolioMetrics={{
+                      ...results,
+                      portfolioReturn: portfolioData.portfolioReturn,
+                      standardDeviation: portfolioData.standardDeviation,
+                      presentValue: portfolioData.presentValue,
+                      years: portfolioData.years
+                    }}
+                    benchmarkReturn={portfolioData.marketReturn * 100}
+                  />
+                </div>
+
+                <div className="section-divider"></div>
+
+                {/* Benchmark Comparison */}
+                <div className="animate-fadeIn">
+                  <BenchmarkComparison 
+                    riskTolerance={portfolioData.riskTolerance}
+                    portfolioMetrics={results}
+                  />
+                </div>
+
+                <div className="section-divider"></div>
+
+                {/* Export Results */}
+                <div className="animate-fadeIn">
+                  <ExportResults results={results} portfolioData={portfolioData} />
+                </div>
+              </div>
+            )}
+
+            <div className="section-divider"></div>
+
+            {/* Stock Quote Tester */}
+            <div className="mb-16">
+              <StockQuote />
+            </div>
+
+            <div className="section-divider"></div>
+          </>
+        )}
 
         {/* Footer */}
         <footer className="text-center text-neutral-500 pt-16 pb-8">
@@ -271,6 +367,25 @@ function App() {
           </p>
         </footer>
       </div>
+
+      {/* Auth Modal */}
+      {showAuthModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="relative bg-white rounded-lg max-w-md w-full max-h-[90vh] overflow-y-auto">
+            <button
+              onClick={() => setShowAuthModal(false)}
+              className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 z-10"
+            >
+              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+            <div className="p-6">
+              <AuthPage onSuccess={() => setShowAuthModal(false)} />
+            </div>
+          </div>
+        </div>
+      )}
 
       <style>{`
         @keyframes fadeIn {

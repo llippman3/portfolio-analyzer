@@ -11,10 +11,11 @@
     "dev:all": "npm run server & npm run dev"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.75.1",
+    "lucide-react": "^0.294.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "recharts": "^2.10.3",
-    "lucide-react": "^0.294.0"
+    "recharts": "^2.10.3"
   },
   "devDependencies": {
     "@types/react": "^18.2.43",
@@ -26,4 +27,3 @@
     "vite": "^5.0.8"
   }
 }
-

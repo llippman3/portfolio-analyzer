@@ -1,7 +1,10 @@
-import React from 'react';
-import { TrendingUp, Target, Activity, PieChart, BarChart3, DollarSign } from 'lucide-react';
+import React, { useState } from 'react';
+import { TrendingUp, Target, Activity, PieChart, BarChart3, DollarSign, ChevronUp, ChevronDown } from 'lucide-react';
 
 const RealPortfolioMetrics = ({ metricsData }) => {
+  const [showVolatilities, setShowVolatilities] = useState(false);
+  const [showCorrelations, setShowCorrelations] = useState(false);
+
   if (!metricsData) return null;
 
   const formatPercent = (value) => {
@@ -289,6 +292,97 @@ const RealPortfolioMetrics = ({ metricsData }) => {
           </div>
         </div>
       </div>
+
+      {/* Individual Stock Volatilities - Collapsible */}
+      {metricsData.holdings && metricsData.holdings.length > 0 && (
+        <div className="p-4 bg-white rounded-lg border border-gray-200">
+          <button
+            onClick={() => setShowVolatilities(!showVolatilities)}
+            className="w-full flex items-center justify-between hover:bg-gray-50 p-2 rounded transition-colors"
+          >
+            <h4 className="font-semibold text-gray-800 flex items-center gap-2">
+              <TrendingUp className="w-5 h-5 text-gray-600" />
+              Individual Stock Volatilities
+            </h4>
+            {showVolatilities ? (
+              <ChevronUp className="w-5 h-5 text-gray-600" />
+            ) : (
+              <ChevronDown className="w-5 h-5 text-gray-600" />
+            )}
+          </button>
+          
+          {showVolatilities && (
+            <div className="space-y-2 mt-3">
+              {metricsData.holdings.map((holding, idx) => (
+                <div key={idx} className="flex justify-between items-center p-2 bg-gray-50 rounded">
+                  <div>
+                    <span className="font-semibold text-gray-900">{holding.symbol}</span>
+                    <span className="text-sm text-gray-600 ml-2">
+                      ({holding.weightPercent?.toFixed(1)}% of portfolio)
+                    </span>
+                  </div>
+                  <div className="text-right">
+                    <span className="font-semibold text-purple-700">
+                      {holding.stdDevPercent ? holding.stdDevPercent.toFixed(2) : 'N/A'}%
+                    </span>
+                    {holding.stdDevPercent && (
+                      <span className="text-xs text-gray-500 ml-1">
+                        (5Y)
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Correlation Info - Collapsible */}
+      {metricsData.correlationMatrix && metricsData.holdings && metricsData.holdings.length > 1 && (
+        <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">
+          <button
+            onClick={() => setShowCorrelations(!showCorrelations)}
+            className="w-full flex items-center justify-between hover:bg-blue-100 p-2 rounded transition-colors"
+          >
+            <div>
+              <h4 className="font-semibold text-blue-900">📊 Stock Correlations</h4>
+              <p className="text-xs text-blue-800 text-left">
+                How your stocks move together (1.0 = perfectly correlated, 0 = independent, -1.0 = inverse)
+              </p>
+            </div>
+            {showCorrelations ? (
+              <ChevronUp className="w-5 h-5 text-blue-700 flex-shrink-0 ml-2" />
+            ) : (
+              <ChevronDown className="w-5 h-5 text-blue-700 flex-shrink-0 ml-2" />
+            )}
+          </button>
+          
+          {showCorrelations && (
+            <div className="grid grid-cols-2 gap-2 text-xs mt-3">
+              {metricsData.holdings.map((holding1, i) => 
+                metricsData.holdings.slice(i + 1).map((holding2, j) => {
+                  const actualJ = i + j + 1;
+                  const corr = metricsData.correlationMatrix[i][actualJ];
+                  if (!corr && corr !== 0) return null;
+                  return (
+                    <div key={`${i}-${actualJ}`} className="bg-white p-2 rounded">
+                      <span className="font-semibold">{holding1.symbol} ↔ {holding2.symbol}:</span>
+                      <span className={`ml-2 font-bold ${
+                        corr > 0.7 ? 'text-green-600' : 
+                        corr > 0.3 ? 'text-yellow-600' : 
+                        'text-red-600'
+                      }`}>
+                        {corr.toFixed(3)}
+                      </span>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 };

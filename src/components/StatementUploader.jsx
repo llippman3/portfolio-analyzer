@@ -1,9 +1,12 @@
-import React, { useState } from 'react';
-import { Upload, FileText, CheckCircle, AlertCircle, Loader, TrendingUp, Activity } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Upload, FileText, CheckCircle, AlertCircle, Loader, TrendingUp, Activity, ChevronDown, ChevronUp, Save } from 'lucide-react';
 import { calculatePortfolioStdDev, calculateComprehensiveMetrics } from '../services/api';
 import RealPortfolioMetrics from './RealPortfolioMetrics';
+import SavePortfolioModal from './SavePortfolioModal';
+import { useAuth } from '../contexts/AuthContext';
 
-const StatementUploader = ({ onDataExtracted }) => {
+const StatementUploader = ({ onDataExtracted, onMetricsCalculated, initialData }) => {
+  const { user } = useAuth();
   const [file, setFile] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [extractedData, setExtractedData] = useState(null);
@@ -13,6 +16,25 @@ const StatementUploader = ({ onDataExtracted }) => {
   const [calculatingStdDev, setCalculatingStdDev] = useState(false);
   const [comprehensiveMetrics, setComprehensiveMetrics] = useState(null);
   const [calculatingMetrics, setCalculatingMetrics] = useState(false);
+  const [showVolatilities, setShowVolatilities] = useState(false);
+  const [showCorrelations, setShowCorrelations] = useState(false);
+  const [showHoldings, setShowHoldings] = useState(true);
+  const [showSaveModal, setShowSaveModal] = useState(false);
+
+  // Load initial data if provided (for saved portfolios)
+  useEffect(() => {
+    if (initialData) {
+      if (initialData.extractedData) {
+        setExtractedData(initialData.extractedData);
+      }
+      if (initialData.comprehensiveMetrics) {
+        setComprehensiveMetrics(initialData.comprehensiveMetrics);
+      }
+      if (initialData.stdDevData) {
+        setStdDevData(initialData.stdDevData);
+      }
+    }
+  }, [initialData]);
 
   const handleFileSelect = (e) => {
     const selectedFile = e.target.files[0];
@@ -153,6 +175,11 @@ const StatementUploader = ({ onDataExtracted }) => {
       
       setComprehensiveMetrics(metrics);
       console.log('✅ Comprehensive metrics calculated successfully!');
+      
+      // Pass metrics to parent component
+      if (onMetricsCalculated && metrics) {
+        onMetricsCalculated(metrics);
+      }
 
     } catch (err) {
       console.error('Error calculating comprehensive metrics:', err);
@@ -331,38 +358,52 @@ const StatementUploader = ({ onDataExtracted }) => {
           {/* Holdings Table */}
           {extractedData.holdings && extractedData.holdings.length > 0 && (
             <div>
-              <h3 className="font-semibold text-gray-800 mb-3">Holdings ({extractedData.holdings.length})</h3>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="bg-gray-100 border-b border-gray-200">
-                      <th className="px-4 py-2 text-left font-semibold text-gray-700">Symbol</th>
-                      <th className="px-4 py-2 text-right font-semibold text-gray-700">Shares</th>
-                      <th className="px-4 py-2 text-right font-semibold text-gray-700">Cost Basis</th>
-                      <th className="px-4 py-2 text-right font-semibold text-gray-700">Current Price</th>
-                      <th className="px-4 py-2 text-right font-semibold text-gray-700">Total Value</th>
-                      <th className="px-4 py-2 text-right font-semibold text-gray-700">Gain/Loss</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {extractedData.holdings.map((holding, index) => (
-                      <tr key={index} className="border-b border-gray-200 hover:bg-gray-50">
-                        <td className="px-4 py-3 font-semibold text-primary-700">{holding.symbol}</td>
-                        <td className="px-4 py-3 text-right">{holding.shares}</td>
-                        <td className="px-4 py-3 text-right">{formatCurrency(holding.costBasis)}</td>
-                        <td className="px-4 py-3 text-right">{formatCurrency(holding.currentPrice)}</td>
-                        <td className="px-4 py-3 text-right font-semibold">{formatCurrency(holding.totalValue)}</td>
-                        <td className={`px-4 py-3 text-right font-semibold ${
-                          holding.gainLoss >= 0 ? 'text-green-600' : 'text-red-600'
-                        }`}>
-                          {formatCurrency(holding.gainLoss)}
-                          <span className="text-xs ml-1">({formatPercent(holding.gainLossPercent)})</span>
-                        </td>
+              <button
+                onClick={() => setShowHoldings(!showHoldings)}
+                className="flex items-center justify-between w-full font-semibold text-gray-800 mb-3 hover:text-primary-600 transition-colors"
+              >
+                <span>Holdings ({extractedData.holdings.length})</span>
+                {showHoldings ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
+              </button>
+              
+              {showHoldings && (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="bg-gray-100 border-b border-gray-200">
+                        <th className="px-4 py-2 text-left font-semibold text-gray-700">Symbol</th>
+                        <th className="px-4 py-2 text-right font-semibold text-gray-700">Shares</th>
+                        <th className="px-4 py-2 text-right font-semibold text-gray-700">Avg Price</th>
+                        <th className="px-4 py-2 text-right font-semibold text-gray-700">Cost Basis</th>
+                        <th className="px-4 py-2 text-right font-semibold text-gray-700">Current Price</th>
+                        <th className="px-4 py-2 text-right font-semibold text-gray-700">Total Value</th>
+                        <th className="px-4 py-2 text-right font-semibold text-gray-700">Gain/Loss</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                    </thead>
+                    <tbody>
+                      {extractedData.holdings.map((holding, index) => {
+                        const totalCost = holding.totalCostBasis || (holding.shares && holding.costBasis ? holding.shares * holding.costBasis : null);
+                        return (
+                          <tr key={index} className="border-b border-gray-200 hover:bg-gray-50">
+                            <td className="px-4 py-3 font-semibold text-primary-700">{holding.symbol}</td>
+                            <td className="px-4 py-3 text-right">{holding.shares}</td>
+                            <td className="px-4 py-3 text-right">{formatCurrency(holding.costBasis)}</td>
+                            <td className="px-4 py-3 text-right font-semibold text-gray-600">{formatCurrency(totalCost)}</td>
+                            <td className="px-4 py-3 text-right">{formatCurrency(holding.currentPrice)}</td>
+                            <td className="px-4 py-3 text-right font-semibold">{formatCurrency(holding.totalValue)}</td>
+                            <td className={`px-4 py-3 text-right font-semibold ${
+                              holding.gainLoss >= 0 ? 'text-green-600' : 'text-red-600'
+                            }`}>
+                              {formatCurrency(holding.gainLoss)}
+                              <span className="text-xs ml-1">({formatPercent(holding.gainLossPercent)})</span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           )}
 
@@ -407,79 +448,111 @@ const StatementUploader = ({ onDataExtracted }) => {
                 </p>
               </div>
 
-              {/* Individual Stock Volatilities */}
+              {/* Individual Stock Volatilities - Collapsible */}
               <div className="p-4 bg-white rounded-lg border border-gray-200">
-                <h4 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
-                  <TrendingUp className="w-5 h-5 text-gray-600" />
-                  Individual Stock Volatilities
-                </h4>
-                <div className="space-y-2">
-                  {stdDevData.stocks.map((stock, idx) => (
-                    <div key={idx} className="flex justify-between items-center p-2 bg-gray-50 rounded">
-                      <div>
-                        <span className="font-semibold text-gray-900">{stock.symbol}</span>
-                        <span className="text-sm text-gray-600 ml-2">
-                          ({(stock.weight * 100).toFixed(1)}% of portfolio)
-                        </span>
-                      </div>
-                      <span className="font-semibold text-purple-700">
-                        {stock.annualizedStdDevPercent.toFixed(2)}%
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Diversification Benefit */}
-              {stdDevData.stocks.length > 1 && (() => {
-                const weightedAvgStdDev = stdDevData.stocks.reduce((sum, s) => 
-                  sum + (s.weight * s.annualizedStdDevPercent), 0
-                );
-                const diversificationBenefit = weightedAvgStdDev - stdDevData.portfolioStdDevPercent;
+                <button
+                  onClick={() => setShowVolatilities(!showVolatilities)}
+                  className="w-full flex items-center justify-between hover:bg-gray-50 p-2 rounded transition-colors"
+                >
+                  <h4 className="font-semibold text-gray-800 flex items-center gap-2">
+                    <TrendingUp className="w-5 h-5 text-gray-600" />
+                    Individual Stock Volatilities
+                  </h4>
+                  {showVolatilities ? (
+                    <ChevronUp className="w-5 h-5 text-gray-600" />
+                  ) : (
+                    <ChevronDown className="w-5 h-5 text-gray-600" />
+                  )}
+                </button>
                 
-                return (
-                  <div className="p-4 bg-green-50 rounded-lg border border-green-200">
-                    <h4 className="font-semibold text-green-900 mb-2">✨ Diversification Benefit</h4>
-                    <p className="text-sm text-green-800">
-                      <strong>Weighted Average Volatility:</strong> {weightedAvgStdDev.toFixed(2)}%
-                    </p>
-                    <p className="text-sm text-green-800">
-                      <strong>Actual Portfolio Volatility:</strong> {stdDevData.portfolioStdDevPercent.toFixed(2)}%
-                    </p>
-                    <p className="text-sm text-green-900 font-semibold mt-2">
-                      Risk Reduction: {diversificationBenefit.toFixed(2)}% thanks to diversification! 🎉
-                    </p>
-                  </div>
-                );
-              })()}
-
-              {/* Correlation Info */}
-              {stdDevData.correlationMatrix && stdDevData.stocks.length > 1 && (
-                <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">
-                  <h4 className="font-semibold text-blue-900 mb-2">📊 Stock Correlations</h4>
-                  <p className="text-xs text-blue-800 mb-2">
-                    How your stocks move together (1.0 = perfectly correlated, 0 = independent, -1.0 = inverse)
-                  </p>
-                  <div className="grid grid-cols-2 gap-2 text-xs">
-                    {stdDevData.stocks.map((stock1, i) => 
-                      stdDevData.stocks.slice(i + 1).map((stock2, j) => {
-                        const actualJ = i + j + 1;
-                        const corr = stdDevData.correlationMatrix[i][actualJ];
-                        return (
-                          <div key={`${i}-${actualJ}`} className="bg-white p-2 rounded">
-                            <span className="font-semibold">{stock1.symbol} ↔ {stock2.symbol}:</span>
-                            <span className={`ml-2 font-bold ${
-                              corr > 0.7 ? 'text-red-600' : 
-                              corr > 0.3 ? 'text-yellow-600' : 
-                              'text-green-600'
-                            }`}>
-                              {corr.toFixed(3)}
+                {showVolatilities && (
+                  <div className="space-y-2 mt-3">
+                    {comprehensiveMetrics ? (
+                      // Use Yahoo Finance 5-year official statistics
+                      comprehensiveMetrics.holdings.map((holding, idx) => (
+                        <div key={idx} className="flex justify-between items-center p-2 bg-gray-50 rounded">
+                          <div>
+                            <span className="font-semibold text-gray-900">{holding.symbol}</span>
+                            <span className="text-sm text-gray-600 ml-2">
+                              ({holding.weightPercent.toFixed(1)}% of portfolio)
                             </span>
                           </div>
-                        );
-                      })
+                          <div className="text-right">
+                            <span className="font-semibold text-purple-700">
+                              {holding.stdDevPercent ? holding.stdDevPercent.toFixed(2) : 'N/A'}%
+                            </span>
+                            {holding.stdDevPercent && (
+                              <span className="text-xs text-gray-500 ml-1">
+                                (5Y)
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      ))
+                    ) : stdDevData ? (
+                      // Fallback to calculated if Yahoo Finance data not available
+                      stdDevData.stocks.map((stock, idx) => (
+                        <div key={idx} className="flex justify-between items-center p-2 bg-gray-50 rounded">
+                          <div>
+                            <span className="font-semibold text-gray-900">{stock.symbol}</span>
+                            <span className="text-sm text-gray-600 ml-2">
+                              ({(stock.weight * 100).toFixed(1)}% of portfolio)
+                            </span>
+                          </div>
+                          <span className="font-semibold text-purple-700">
+                            {stock.annualizedStdDevPercent.toFixed(2)}%
+                          </span>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="text-gray-500 text-sm">No volatility data available</p>
                     )}
                   </div>
+                )}
+              </div>
+
+              {/* Correlation Info - Collapsible */}
+              {stdDevData.correlationMatrix && stdDevData.stocks.length > 1 && (
+                <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">
+                  <button
+                    onClick={() => setShowCorrelations(!showCorrelations)}
+                    className="w-full flex items-center justify-between hover:bg-blue-100 p-2 rounded transition-colors"
+                  >
+                    <div>
+                      <h4 className="font-semibold text-blue-900">📊 Stock Correlations</h4>
+                      <p className="text-xs text-blue-800 text-left">
+                        How your stocks move together (1.0 = perfectly correlated, 0 = independent, -1.0 = inverse)
+                      </p>
+                    </div>
+                    {showCorrelations ? (
+                      <ChevronUp className="w-5 h-5 text-blue-700 flex-shrink-0 ml-2" />
+                    ) : (
+                      <ChevronDown className="w-5 h-5 text-blue-700 flex-shrink-0 ml-2" />
+                    )}
+                  </button>
+                  
+                  {showCorrelations && (
+                    <div className="grid grid-cols-2 gap-2 text-xs mt-3">
+                      {stdDevData.stocks.map((stock1, i) => 
+                        stdDevData.stocks.slice(i + 1).map((stock2, j) => {
+                          const actualJ = i + j + 1;
+                          const corr = stdDevData.correlationMatrix[i][actualJ];
+                          return (
+                            <div key={`${i}-${actualJ}`} className="bg-white p-2 rounded">
+                              <span className="font-semibold">{stock1.symbol} ↔ {stock2.symbol}:</span>
+                              <span className={`ml-2 font-bold ${
+                                corr > 0.7 ? 'text-green-600' : 
+                                corr > 0.3 ? 'text-yellow-600' : 
+                                'text-red-600'
+                              }`}>
+                                {corr.toFixed(3)}
+                              </span>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -504,8 +577,45 @@ const StatementUploader = ({ onDataExtracted }) => {
       {comprehensiveMetrics && (
         <div className="mt-8 animate-fadeIn">
           <RealPortfolioMetrics metricsData={comprehensiveMetrics} />
+          
+          {/* Save Portfolio Button */}
+          {user && (
+            <div className="mt-6 flex justify-center">
+              <button
+                onClick={() => setShowSaveModal(true)}
+                className="flex items-center gap-2 px-6 py-3 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors shadow-lg hover:shadow-xl"
+              >
+                <Save className="w-5 h-5" />
+                <span className="font-semibold">Save Portfolio to Cloud</span>
+              </button>
+            </div>
+          )}
+          
+          {!user && (
+            <div className="mt-6 p-4 bg-yellow-50 border border-yellow-200 rounded-lg text-center">
+              <p className="text-sm text-yellow-900">
+                <strong>💡 Tip:</strong> Sign in to save your portfolio to the cloud and access it from anywhere!
+              </p>
+            </div>
+          )}
         </div>
       )}
+
+      {/* Save Portfolio Modal */}
+      <SavePortfolioModal
+        isOpen={showSaveModal}
+        onClose={() => setShowSaveModal(false)}
+        portfolioData={{
+          extractedData,
+          comprehensiveMetrics,
+          stdDevData,
+          timestamp: new Date().toISOString()
+        }}
+        onSaved={(savedPortfolio) => {
+          console.log('Portfolio saved:', savedPortfolio);
+          alert('Portfolio saved successfully!');
+        }}
+      />
 
       {/* Info Box */}
       <div className="mt-6 p-4 bg-blue-50 rounded-lg border border-blue-200">
