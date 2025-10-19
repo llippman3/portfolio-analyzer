@@ -29,12 +29,16 @@ const StatementUploader = ({ onDataExtracted, onMetricsCalculated, initialData }
       }
       if (initialData.comprehensiveMetrics) {
         setComprehensiveMetrics(initialData.comprehensiveMetrics);
+        // Notify parent component so Benchmarks tab gets the data
+        if (onMetricsCalculated) {
+          onMetricsCalculated(initialData.comprehensiveMetrics);
+        }
       }
       if (initialData.stdDevData) {
         setStdDevData(initialData.stdDevData);
       }
     }
-  }, [initialData]);
+  }, [initialData, onMetricsCalculated]);
 
   const handleFileSelect = (e) => {
     const selectedFile = e.target.files[0];
